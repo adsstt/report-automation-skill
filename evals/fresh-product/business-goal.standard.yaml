@@ -1,0 +1,9 @@
+primary_goal: efficiency
+goal_description: 降低 NovaFit 获客成本并保持安装规模
+
+# 首次 infer 时故意不替用户选择周期。AI 应给出建议，然后阻断所有工作簿生成。
+period:
+  type: null
+  confirmed: false
+
+layout_confirmed: false

@@ -24,6 +24,7 @@ import argparse
 import json
 import re
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -236,6 +237,17 @@ def semantic_issues(profile: dict[str, Any]) -> list[Issue]:
     group_keys = set()
     for rt in profile.get("report_types") or []:
         group_keys |= set((rt.get("aggregation") or {}).get("group_by") or [])
+        scope = rt.get("time_scope") or {}
+        if scope.get("period") == "custom":
+            start, end = scope.get("start"), scope.get("end")
+            if not start or not end:
+                add("FAIL", "CUSTOM_PERIOD_RANGE", f"report_type {rt.get('id')} 的自定义周期缺少 start/end", f"report_types[{rt.get('id')}].time_scope")
+            else:
+                try:
+                    if date.fromisoformat(start) > date.fromisoformat(end):
+                        add("FAIL", "CUSTOM_PERIOD_RANGE", f"report_type {rt.get('id')} 的 start 晚于 end", f"report_types[{rt.get('id')}].time_scope")
+                except ValueError:
+                    add("FAIL", "CUSTOM_PERIOD_RANGE", f"report_type {rt.get('id')} 的自定义日期格式必须为 YYYY-MM-DD", f"report_types[{rt.get('id')}].time_scope")
 
     comparison_names = {
         "base", "delta", "delta_pct",
@@ -247,6 +259,7 @@ def semantic_issues(profile: dict[str, Any]) -> list[Issue]:
             continue
         for sheet in art.get("sheets", []) or []:
             sid = sheet.get("id")
+            allowed_group_keys = group_keys | set(sheet.get("group_by") or [])
             if sheet.get("match") not in report_ids:
                 add("FAIL", "BAD_SHEET_MATCH", f"sheet {sid} 的 match={sheet.get('match')} 没有对应的 report_type", f"output.sheets[{sid}]")
             header_names = [c.get("header") for c in sheet.get("columns", []) if c.get("header")]
@@ -271,7 +284,7 @@ def semantic_issues(profile: dict[str, Any]) -> list[Issue]:
                         add("FAIL", "BAD_COLUMN", f"sheet {sid} 列「{hdr}」引用了不存在的派生指标 {key}", f"output.sheets[{sid}]")
                 elif src.startswith("group."):
                     key = src.split(".", 1)[1]
-                    if key not in group_keys:
+                    if key not in allowed_group_keys:
                         add("FAIL", "BAD_COLUMN", f"sheet {sid} 列「{hdr}」引用了未在 group_by 中声明的维度 {key}", f"output.sheets[{sid}]")
                 elif src.startswith("dimensions."):
                     key = src.split(".", 1)[1]
@@ -305,6 +318,45 @@ def semantic_issues(profile: dict[str, Any]) -> list[Issue]:
                 add("WARN", "EFFECTIVE_OVERLAP",
                     f"metrics.{name}.effective 分段可能重叠：{prev.get('from')} 起与 {cur.get('from')} 起",
                     f"metrics.{name}")
+
+    # ---- 8c. 无目标模板标准报告门禁 ----
+    intent = profile.get("report_intent") or {}
+    if intent:
+        period = intent.get("period") or {}
+        if not period.get("confirmed") or period.get("type") not in {"daily", "weekly", "monthly", "custom"}:
+            suggestion = (period.get("recommendation") or {}).get("suggested_type") or "daily / weekly / monthly / custom"
+            add(
+                "FAIL",
+                "UNCONFIRMED_PERIOD",
+                f"时间周期尚未由用户显式选择；建议 {suggestion}。确认前不生成模板、草稿或正式报告",
+                "report_intent.period",
+            )
+        if period.get("type") == "custom" and period.get("confirmed"):
+            start, end = period.get("start"), period.get("end")
+            if not start or not end:
+                add("FAIL", "CUSTOM_PERIOD_RANGE", "自定义周期必须同时填写 start 与 end", "report_intent.period")
+            else:
+                try:
+                    if date.fromisoformat(start) > date.fromisoformat(end):
+                        add("FAIL", "CUSTOM_PERIOD_RANGE", "自定义周期 start 不能晚于 end", "report_intent.period")
+                except ValueError:
+                    add("FAIL", "CUSTOM_PERIOD_RANGE", "自定义周期必须使用 YYYY-MM-DD", "report_intent.period")
+        for name in intent.get("primary_kpis") or []:
+            if name not in metrics:
+                add("FAIL", "UNKNOWN_PRIMARY_KPI", f"核心 KPI {name} 在 metrics 中不存在", "report_intent.primary_kpis")
+        workbook_artifacts = [
+            artifact for artifact in (profile.get("output") or {}).get("artifacts", [])
+            if artifact.get("kind") == "xlsx_workbook"
+        ]
+        names = [
+            sheet.get("target_sheet")
+            for artifact in workbook_artifacts
+            for sheet in artifact.get("sheets") or []
+        ]
+        if names != ["管理摘要", "明细数据", "趋势环比"]:
+            add("FAIL", "STANDARD_SHEETS", "无模板标准报告必须且只能包含：管理摘要、明细数据、趋势环比", "output.artifacts")
+        if period.get("confirmed") and not intent.get("layout_confirmed"):
+            add("FAIL", "UNCONFIRMED_LAYOUT", "标准报告版式尚未确认，只允许生成带标识的 DRAFT 预览", "report_intent.layout_confirmed")
 
     # ---- 9. origin 与验证证据 ----
     origin = profile.get("origin") or {}

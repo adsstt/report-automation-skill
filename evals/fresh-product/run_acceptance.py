@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import yaml
+from openpyxl import load_workbook
 
 ROOT = Path(__file__).resolve().parent
 PACKAGE = ROOT.parents[1]
@@ -111,15 +113,72 @@ def main() -> int:
     expected = {"spend": 300, "registration": 30, "kyc": 18, "ftd": 8, "revenue": 800}
     if totals != expected:
         raise RuntimeError(f"unexpected core totals: {totals}")
+
+    # 第二条独立验收：新用户没有目标模板，只提供源数据与业务目标。
+    standard_probe = RUNTIME / "standard-probe.json"
+    standard_draft = RUNTIME / "standard-profile.draft.yaml"
+    standard_confirmed = RUNTIME / "standard-profile.confirmed.yaml"
+    standard_template = RUNTIME / "standard-report-template.xlsx"
+    standard_workbook = RUNTIME / "NovaFit_standard_weekly_20261025.xlsx"
+    standard_source = ROOT / "standard-sources" / "novafit_meta_ads.csv"
+    run("standard probe", [
+        SCRIPTS / "probe_sources.py", "--source-file", standard_source, "--out", standard_probe,
+    ])
+    run("standard infer", [
+        SCRIPTS / "infer_mappings.py", "--probe", standard_probe,
+        "--business-goal", ROOT / "business-goal.standard.yaml", "--standard-output",
+        "--product", "NovaFit", "--out", standard_draft,
+    ])
+    run("unconfirmed period gate", [SCRIPTS / "validate_profile.py", standard_draft], expected=1)
+    run("unconfirmed period template gate", [
+        SCRIPTS / "create_standard_template.py", "--profile", standard_draft, "--out", standard_template,
+    ], expected=1)
+    if standard_template.exists():
+        raise RuntimeError("unconfirmed period unexpectedly created a workbook")
+
+    standard_profile = yaml.safe_load(standard_draft.read_text(encoding="utf-8"))
+    standard_profile["report_intent"]["period"]["type"] = "weekly"
+    standard_profile["report_intent"]["period"]["confirmed"] = True
+    standard_profile["report_intent"]["layout_confirmed"] = True
+    for ambiguity in standard_profile.get("ambiguities", []):
+        if ambiguity.get("level") == "P0":
+            ambiguity["status"] = "confirmed"
+    standard_confirmed.write_text(
+        yaml.safe_dump(standard_profile, allow_unicode=True, sort_keys=False), encoding="utf-8"
+    )
+    run("standard confirmed profile", [SCRIPTS / "validate_profile.py", standard_confirmed])
+    run("standard template", [
+        SCRIPTS / "create_standard_template.py", "--profile", standard_confirmed,
+        "--out", standard_template,
+    ])
+    run("standard render", [
+        SCRIPTS / "render_workbook.py", "--profile", standard_confirmed,
+        "--report-type", "standard", "--date", "2026-10-25",
+        "--source-file", f"meta_ad={standard_source}", "--out", standard_workbook,
+    ])
+    standard_book = load_workbook(standard_workbook, data_only=False)
+    if standard_book.sheetnames != ["管理摘要", "明细数据", "趋势环比"]:
+        raise RuntimeError(f"unexpected standard sheets: {standard_book.sheetnames}")
+    summary = standard_book["管理摘要"]
+    headers = {summary.cell(row=7, column=column).value: column for column in range(1, summary.max_column + 1)}
+    spend_column = headers["花费"]
+    standard_values = [summary.cell(row=row, column=spend_column).value for row in range(8, 12)]
+    standard_book.close()
+    if standard_values != [280, 350, 70, 0.25]:
+        raise RuntimeError(f"unexpected standard comparison values: {standard_values}")
+
     (RUNTIME / "acceptance_result.md").write_text(
         "# NovaFit fresh-product acceptance\n\n"
         "- Result: PASS\n"
-        "- Flow: Probe → Infer (blocked draft) → confirmed profile → generate → verify → render → workbook verify\n"
+        "- Template flow: Probe → Infer (blocked draft) → confirmed profile → generate → verify → render → workbook verify\n"
+        "- No-template flow: Probe → period recommendation/block → user confirms weekly/P0/layout → standard template → formal three-sheet report\n"
         f"- Core totals: {totals}\n"
-        f"- Workbook: `{workbook}`\n",
+        f"- Workbook: `{workbook}`\n"
+        f"- Standard comparison (previous/current/absolute/rate): {standard_values}\n"
+        f"- Standard workbook: `{standard_workbook}`\n",
         encoding="utf-8",
     )
-    print(f"ACCEPTANCE PASS: {totals}")
+    print(f"ACCEPTANCE PASS: template={totals}; no-template={standard_values}")
     return 0
 
 

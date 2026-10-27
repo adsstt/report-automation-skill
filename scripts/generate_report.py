@@ -115,6 +115,18 @@ def report_dates(report_type: dict[str, Any], report_date: str) -> set[str]:
     if mode == "rolling_window":
         days = int(scope.get("rolling_days") or 1)
         return {(anchor - timedelta(days=offset)).isoformat() for offset in range(days)}
+    if period == "custom":
+        start = date.fromisoformat(scope["start"])
+        end = date.fromisoformat(scope["end"])
+        days = (end - start).days + 1
+        starts = [start]
+        if mode == "multi_period" and "previous_custom" in (scope.get("windows") or []):
+            starts.insert(0, start - timedelta(days=days))
+        return {
+            (window_start + timedelta(days=offset)).isoformat()
+            for window_start in starts
+            for offset in range(days)
+        }
     if period == "week":
         current_start = anchor - timedelta(days=anchor.weekday())
         starts = [current_start]
@@ -155,6 +167,10 @@ def report_period_label(report_type: dict[str, Any], report_date: str, source_da
         if (report_type.get("comparison") or {}).get("mode") == "sequential_trend":
             return observed.isoformat()
         return "current_window"
+    if period == "custom":
+        start = date.fromisoformat(scope["start"])
+        end = date.fromisoformat(scope["end"])
+        return "current_custom" if start <= observed <= end else "previous_custom"
     if period == "week":
         current_start = anchor - timedelta(days=anchor.weekday())
         return "current_week" if observed >= current_start else "previous_week"

@@ -9,6 +9,7 @@
   "properties": {
     "profile_version": { "const": 1 },
     "product": { "$ref": "#/$defs/product" },
+    "report_intent": { "$ref": "#/$defs/report_intent" },
     "accounts": { "$ref": "#/$defs/accounts" },
     "report_types": {
       "type": "array",
@@ -76,6 +77,61 @@
       }
     },
 
+    "report_intent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primary_goal", "goal_description", "period", "comparison", "primary_kpis", "dimensions", "layout_confirmed"],
+      "properties": {
+        "primary_goal": { "type": "string", "minLength": 1 },
+        "goal_description": { "type": "string" },
+        "period": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "confirmed", "recommendation"],
+          "properties": {
+            "type": { "type": ["string", "null"], "enum": ["daily", "weekly", "monthly", "custom", null] },
+            "start": { "type": "string", "format": "date" },
+            "end": { "type": "string", "format": "date" },
+            "confirmed": { "type": "boolean" },
+            "recommendation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["suggested_type", "evidence"],
+              "properties": {
+                "suggested_type": { "enum": ["daily", "weekly", "monthly", "custom"] },
+                "options": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": { "enum": ["daily", "weekly", "monthly", "custom"] }
+                },
+                "evidence": { "type": "array", "items": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "comparison": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": {
+            "mode": { "const": "previous_equal_period" }
+          }
+        },
+        "primary_kpis": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+        },
+        "dimensions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["date", "account_id", "country_code", "campaign_id", "adgroup_id", "ad_id"] }
+        },
+        "layout_confirmed": { "type": "boolean" }
+      }
+    },
+
     "report_type": {
       "type": "object",
       "additionalProperties": false,
@@ -94,8 +150,10 @@
       "required": ["mode"],
       "properties": {
         "mode": { "enum": ["single_period", "multi_period", "rolling_window"] },
-        "period": { "enum": ["day", "week", "month"] },
+        "period": { "enum": ["day", "week", "month", "custom"] },
         "anchor": { "enum": ["report_date", "monday", "month_start"] },
+        "start": { "type": "string", "format": "date" },
+        "end": { "type": "string", "format": "date" },
         "point": { "type": "string" },
         "windows": {
           "type": "array",
@@ -595,7 +653,7 @@
                 "rows": {
                   "type": "array",
                   "minItems": 2,
-                  "items": { "enum": ["base", "current", "delta"] }
+                  "items": { "enum": ["base", "current", "delta", "delta_abs", "delta_pct"] }
                 },
                 "group_by": { "type": "array", "items": { "type": "string" } },
                 "delta_label": { "type": "string" },

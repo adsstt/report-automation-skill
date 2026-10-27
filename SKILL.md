@@ -1,6 +1,6 @@
 ---
 name: report-automation
-description: 把人工做的日报/时报/周报变成可自动复用的报表流程。用户只需提供一次「源数据样本 + 目标报表样本」，本技能自动探源、反推映射、把不确定的口径列成带证据的问题清单请用户确认，沉淀为 profile.yaml 配方单；之后每次只给源文件即可出过程表/结果表 CSV 与客户 Excel 工作簿（含历史追加与环比块），改格式或改口径只需改配置。凡是涉及投放报表的场景都应使用：做日报、做时报、做周报、客户报表、把 Excel 报表自动化、换产品/换平台重建报表、TikTok/Meta/Google 投放数据配 AppsFlyer/Adjust 归因出报表、客户改表头、报表口径对齐、影子对账。
+description: 把人工做的日报/时报/周报变成可自动复用的报表流程。有目标模板时按模板反推并复刻；没有目标模板时，根据源数据和业务目标，在用户显式选择时间周期并确认数字口径后，自动生成管理摘要、明细数据、趋势环比三张 Sheet 的第一版标准报告。规则沉淀为 profile.yaml；之后每次只给源文件即可出 CSV 与 Excel。凡是涉及投放报表、客户报表、换产品重建报表、口径对齐或影子对账都应使用。
 ---
 
 # 报表自动化（report-automation）
@@ -25,6 +25,34 @@ description: 把人工做的日报/时报/周报变成可自动复用的报表�
 | "客户把表头改了" / "加一列" | 改格式 | 改 profile 的 `output`，跑 `verify_format.py`，不改脚本 |
 | "这个指标口径变了" / "新导出多了个字段" | 改口径 | 改 `metrics`（必要时用 `effective` 分段），重跑校验与对账 |
 | "你有现成的例子吗" | 参考示例 | 指向 `examples/`，并说明三道闸 |
+
+## 首次接入先判断有没有目标模板
+
+- **有目标模板**：继续走下面的「首次接入五步」，Probe 同时读取源数据和目标模板。
+- **没有目标模板**：先让用户说明业务目标，再探源并给出日报、周报、月报或自定义周期建议。建议必须带日期覆盖证据，但不能替用户选择。
+
+无模板模式下，用户未显式选择时间周期时必须阻断：不生成模板、不生成 DRAFT、不生成正式报告。用户选择周期后，再确认 P0 数字口径；仍有 P0 时只允许生成带黄色提示条的 `_DRAFT.xlsx`。正式报告固定包含：`管理摘要`、`明细数据`、`趋势环比`。口径与数据质量在对话中确认，不增加第四张 Sheet。
+
+```bash
+# 1) 只探源数据
+python scripts/probe_sources.py --source-dir "<源目录>" --out runtime/probe.json
+
+# 2) 写入业务目标；period.confirmed 未确认时保持 false
+# runtime/business-goal.yaml
+
+# 3) 生成标准报告候选 profile（会给周期建议）
+python scripts/infer_mappings.py --probe runtime/probe.json \
+  --business-goal runtime/business-goal.yaml --standard-output \
+  --out runtime/profile.draft.yaml
+
+# 4) 用户选择周期、确认 P0 后，可先生成版式预览
+python scripts/create_standard_template.py --profile runtime/profile.draft.yaml \
+  --out runtime/standard-report-template.xlsx --draft
+
+# 5) 用户确认版式并把 layout_confirmed 设为 true 后生成正式模板
+python scripts/create_standard_template.py --profile runtime/profile.confirmed.yaml \
+  --out runtime/standard-report-template.xlsx
+```
 
 ## 首次接入五步
 
@@ -166,6 +194,7 @@ python scripts/verify_workbook.py --template <模板.xlsx> --output <产物.xlsx
 `references/lookups/business-aggregates.yaml` | 区域聚合码、组合特例、习惯译名 |
 `scripts/probe_sources.py` | 探源与目标格式 |
 `scripts/infer_mappings.py` | 反推候选（只产候选） |
+`scripts/create_standard_template.py` | 无目标模板时创建标准三 Sheet 模板或 DRAFT |
 `scripts/validate_profile.py` | 结构 + 语义 + P0 门禁 |
 `scripts/verify_format.py` | 列能否对上目标表头（可反向起草列定义） |
 `scripts/verify_profile_fit.py` | 示例复用适配度打分 |

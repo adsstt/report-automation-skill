@@ -58,6 +58,11 @@ EXPR_ALIASES = {
 }
 # 指标键 → 过程表 CSV 的实际列名（生成器对投放侧四个基础指标用固定中文列名）
 CSV_COL = {"spend": "花费", "impressions": "展示", "clicks": "点击", "install": "安装"}
+METRIC_LABELS = {
+    "spend": "花费", "impressions": "展示", "clicks": "点击", "install": "安装",
+    "registration": "注册", "kyc": "KYC", "first_deposit": "首充", "trade": "交易",
+    "revenue": "收入",
+}
 
 
 # ------------------------------------------------------------------ 表达式求值
@@ -434,7 +439,7 @@ def main() -> int:
                 render_failures.append(f"{ws.title}: 模板缺列 {missing}")
                 continue
 
-            group_by = sheet.get("group_by") or ["日期"]
+            group_by = sheet.get("group_by") if "group_by" in sheet else ["日期"]
             dims = ["国家名称" if g == "国家" else g for g in group_by]
             filtered = rows
             flt = sheet.get("filter") or {}
@@ -450,9 +455,11 @@ def main() -> int:
                     base_filtered = [r for r in base_rows if str(r.get("事件")) == flt["event"]]
                 base_agg = aggregate(base_filtered, dims, base_display, metric_names)
                 base_map = {tuple(r["__key__"]): r for r in base_agg}
+                if sheet.get("placement", {}).get("mode") == "replace_sheet" and ws.max_row > header_row:
+                    ws.delete_rows(header_row + 1, ws.max_row - header_row)
                 date_col = colmap.get(headers[0])
                 label_col = colmap.get(headers[1]) if len(headers) > 1 else None
-                if date_col and label_col:
+                if sheet.get("placement", {}).get("mode") != "replace_sheet" and date_col and label_col:
                     removed = clear_comparison_blocks(
                         ws, header_row, date_col, label_col,
                         base_display, current_display)
@@ -461,17 +468,20 @@ def main() -> int:
                 target = ws.max_row + 1
                 sample_row = max(header_row + 1, ws.max_row - 1)
                 written = 0
+                block = (sheet.get("comparison_layout") or {}).get("block") or {}
+                phases = block.get("rows") or ["base", "current", "delta"]
                 for rec in agg:
                     key = tuple(rec["__key__"])
-                    base = base_map.get(key, {m: None for m in metric_names})
-                    for phase in ("base", "current", "delta"):
+                    base_record = base_map.get(key)
+                    base = base_record or {m: None for m in metric_names}
+                    for phase in phases:
                         values = {}
                         for header in headers:
                             coldef = next(c for c in sheet["columns"] if c["header"] == header)
                             src = coldef["source"]
                             if src == "$report_date":
                                 values[header] = (
-                                    None if phase == "delta"
+                                    None if phase in {"delta", "delta_abs", "delta_pct"}
                                     else (base_display if phase == "base" else current_display)
                                 )
                             elif src.startswith("$const_"):
@@ -493,40 +503,79 @@ def main() -> int:
                                     values[header] = None
                             elif src.startswith("metrics."):
                                 name = src.split(".", 1)[1]
-                                old_value = decimal_or_zero(base.get(name))
+                                old_value = None if base_record is None else decimal_or_zero(base.get(name))
                                 current_value = decimal_or_zero(rec.get(name))
                                 if phase == "base":
-                                    values[header] = float(old_value)
+                                    values[header] = float(old_value) if old_value is not None else None
                                 elif phase == "current":
                                     values[header] = float(current_value)
+                                elif phase == "delta_abs":
+                                    values[header] = float(current_value - old_value) if old_value is not None else block.get("null_symbol", "N/A")
                                 else:
-                                    block = (sheet.get("comparison_layout") or {}).get("block") or {}
-                                    if old_value == 0:
-                                        values[header] = block.get("null_symbol", "/")
+                                    if old_value in (None, 0):
+                                        values[header] = block.get("null_symbol", "N/A")
                                     else:
                                         values[header] = float(current_value / old_value - 1)
                             elif src.startswith("derived."):
                                 name = src.split(".", 1)[1]
                                 expr = (derived_cfg.get(name) or {}).get("expr", "")
-                                cur = None if phase == "delta" else eval_expr(expr, rec)
-                                old = eval_expr(expr, base) if phase == "base" else None
+                                cur = eval_expr(expr, rec)
+                                old = eval_expr(expr, base) if base_record is not None else None
                                 if phase == "base":
                                     values[header] = float(old) if old is not None else None
                                 elif phase == "current":
                                     values[header] = float(cur) if cur is not None else None
+                                elif phase == "delta_abs":
+                                    values[header] = float(cur - old) if cur is not None and old is not None else block.get("null_symbol", "N/A")
                                 else:
                                     delta = safe_div(cur, old) if (cur is not None and old not in (None, 0)) else None
-                                    values[header] = float(delta - 1) if delta is not None else "/"
-                        # 环比行：第二列写标识
-                        if phase == "delta":
+                                    values[header] = float(delta - 1) if delta is not None else block.get("null_symbol", "N/A")
+                        # 对比阶段标识写在第二列
+                        label_source = sheet["columns"][1]["source"] if len(sheet["columns"]) > 1 else ""
+                        if label_source.startswith("$const_") or phase in {"delta", "delta_abs", "delta_pct"}:
                             label_col = colmap.get(headers[1]) if len(headers) > 1 else None
                             if label_col:
-                                values[headers[1]] = "环比"
+                                values[headers[1]] = {
+                                    "base": "上期", "current": "本期", "delta_abs": "绝对变化",
+                                    "delta": "环比", "delta_pct": "环比",
+                                }[phase]
                         style_from(ws, sample_row, target, ws.max_column)
+                        written_row = target
                         target = write_rows(ws, target, values, colmap, headers)
+                        for coldef in sheet["columns"]:
+                            if not coldef["source"].startswith(("metrics.", "derived.")):
+                                continue
+                            column = colmap.get(coldef["header"])
+                            if column:
+                                ws.cell(row=written_row, column=column).number_format = (
+                                    "0.00%" if phase in {"delta", "delta_pct"} else "#,##0.00"
+                                )
                         written += 1
                 extend_conditional_formatting(ws, sample_row, ws.max_row - written + 1, ws.max_row, ws.max_column)
-                print(f"{ws.title}: 写入环比块 {written} 行（{written // 3} 组）")
+                if sheet.get("target_sheet") == "管理摘要" and agg:
+                    intent = profile.get("report_intent") or {}
+                    primary = next((name for name in intent.get("primary_kpis") or [] if name in metrics_cfg), None)
+                    if primary:
+                        current_record = agg[0]
+                        key = tuple(current_record["__key__"])
+                        previous_record = base_map.get(key)
+                        current_value = decimal_or_zero(current_record.get(primary))
+                        label = METRIC_LABELS.get(primary, primary)
+                        if previous_record is None:
+                            conclusion = f"本期{label}为 {current_value:.2f}；缺少上一等长周期数据，环比为 N/A。"
+                        else:
+                            previous_value = decimal_or_zero(previous_record.get(primary))
+                            absolute = current_value - previous_value
+                            if previous_value == 0:
+                                conclusion = f"本期{label}为 {current_value:.2f}，上期为 0；变化率为 N/A。"
+                            else:
+                                ratio = current_value / previous_value - 1
+                                conclusion = (
+                                    f"本期{label}为 {current_value:.2f}，上期为 {previous_value:.2f}，"
+                                    f"绝对变化 {absolute:+.2f}，环比 {ratio:+.2%}。"
+                                )
+                        ws["B5"] = conclusion
+                print(f"{ws.title}: 写入环比块 {written} 行（{written // max(len(phases), 1)} 组）")
                 continue
 
             # ---- 普通历史 sheet ----

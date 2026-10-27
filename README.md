@@ -1,7 +1,8 @@
 # report-automation
 
 把「人工做报表」变成「AI 做报表」的一个可复制技能包。
-新用户只需**一次**提供源数据样本 + 目标报表样本，本技能会把报表规则理清、固化成
+新用户提供源数据样本和业务目标即可开始。有目标报表样本时按模板复刻；没有目标模板时，
+在用户选择时间周期并确认数字口径后，自动生成第一版标准三 Sheet 报告。规则会固化成
 `profile.yaml`（配方单）；之后每次只给源文件，就能自动产出日报 / 时报 / 周报。
 
 ## 它解决什么问题
@@ -67,6 +68,8 @@ pip install -r requirements.txt
 
 ## 第一次用（教它一遍）
 
+### 有目标模板
+
 ```bash
 # 1) 探源 + 探目标格式
 python scripts/probe_sources.py --source-dir <源目录> --target <目标报表.xlsx> --out runtime/probe.json
@@ -84,6 +87,45 @@ python scripts/verify_format.py --profile runtime/profile.draft.yaml --target <�
 
 把 `validate_profile.py` 报的 P0 问题逐条问清楚、写进 profile，再用样本跑一遍
 影子对账（`shadow_diff.py`），差异归零后可定稿。
+
+### 没有目标模板
+
+先提供源数据与业务目标。AI 会根据日期覆盖和目标建议日报、周报、月报或自定义周期，
+但必须由用户显式选择。未选择时所有工作簿生成都会被阻断。
+
+```bash
+# 1) 只探源
+python scripts/probe_sources.py --source-dir <源目录> --out runtime/probe.json
+
+# 2) 准备业务目标（示例）
+# primary_goal: efficiency
+# goal_description: 降低获客成本并保持安装规模
+# period:
+#   type: weekly
+#   confirmed: true
+# layout_confirmed: false
+
+# 3) 生成候选 profile；如未选择 period，只输出建议并保持门禁
+python scripts/infer_mappings.py --probe runtime/probe.json \
+  --business-goal runtime/business-goal.yaml --standard-output \
+  --out runtime/profile.draft.yaml
+
+# 4) 周期已选但口径或版式未确认时，只能预览 DRAFT
+python scripts/create_standard_template.py --profile runtime/profile.draft.yaml \
+  --out runtime/standard-report-template.xlsx --draft
+
+# 5) 确认 P0 与版式后生成正式模板
+python scripts/create_standard_template.py --profile runtime/profile.confirmed.yaml \
+  --out runtime/standard-report-template.xlsx
+
+# 6) 用现有引擎填数
+python scripts/render_workbook.py --profile runtime/profile.confirmed.yaml \
+  --report-type standard --date 2026-10-25 --source-file <id>=<源文件> \
+  --out runtime/标准报告_20261025.xlsx
+```
+
+标准报告固定包含 `管理摘要`、`明细数据`、`趋势环比`。管理摘要和趋势环比展示上期、
+本期、绝对变化与变化率；缺少上期或分母为零时显示 `N/A`，不伪造为 0。
 
 若从内置示例开始，先复制为项目草稿，不能直接用 `examples/` 出正式报告：
 
@@ -120,12 +162,13 @@ python scripts/verify_workbook.py --template <模板.xlsx> --output <产物.xlsx
 | "这周开始收入列不要了" | `format_history` 记一笔 + 去掉对应列 |
 | "这个指标计算口径变了" | `metrics.<名>.effective` 按日期分段 |
 
-## 三个脚本各管一件事
+## 主要脚本各管一件事
 
 | 脚本 | 管什么 | 什么时候用 |
 |---|---|---|
 `probe_sources.py` | 看源文件与目标格式长什么样 | 第一次接入 |
 `infer_mappings.py` | 反推候选映射（不落定） | 第一次接入 |
+`create_standard_template.py` | 无目标模板时创建标准三 Sheet 模板 | 第一次接入 / 版式调整 |
 `validate_profile.py` | 配方单结构与红线校验 | 每次改 profile 后 |
 `verify_format.py` | 列能不能对上目标表头 | 客户改版后 / 接入时 |
 `generate_report.py` | 出过程表/结果表 CSV | 每次 |

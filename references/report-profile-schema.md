@@ -14,6 +14,32 @@
 `metrics` | 指标 | 语义角色 → 源字段（支持候选与口径分段） |
 `output` | 目标格式 | 写哪个工作簿/CSV、每个 sheet 的列定义 |
 
+## report_intent：无目标模板时的报告意图
+
+`report_intent` 是可选块；已有目标模板的 profile 不需要迁移。无模板模式用它记录业务目标、
+用户选择的周期、核心 KPI、明细维度和版式确认状态。
+
+```yaml
+report_intent:
+  primary_goal: efficiency
+  goal_description: 降低获客成本并保持安装规模
+  period:
+    type: weekly                 # daily | weekly | monthly | custom
+    confirmed: true              # 必须由用户显式确认
+    recommendation:
+      suggested_type: weekly
+      options: [daily, weekly, monthly, custom]
+      evidence: [源数据覆盖 21 个不同日期]
+  comparison: { mode: previous_equal_period }
+  primary_kpis: [spend, impressions, clicks, install]
+  dimensions: [date, account_id, campaign_id, ad_id]
+  layout_confirmed: false
+```
+
+`period.confirmed: false` 是硬阻断：模板、DRAFT 和正式报告都不能生成。周期确认后，未解决 P0
+或未确认版式时可以显式生成 DRAFT；正式报告还要求 `layout_confirmed: true`。`custom` 周期必须
+同时提供 `start` 和 `end`，对比期自动取紧邻的上一等长日期范围。
+
 ## report_types：三个正交轴
 
 ```yaml

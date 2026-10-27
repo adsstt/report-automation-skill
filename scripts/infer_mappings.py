@@ -184,13 +184,163 @@ def match_header(header: str) -> tuple[str, str] | None:
     return None
 
 
+PERIOD_ALIASES = {
+    "daily": "daily", "day": "daily", "日报": "daily",
+    "weekly": "weekly", "week": "weekly", "周报": "weekly",
+    "monthly": "monthly", "month": "monthly", "月报": "monthly",
+    "custom": "custom", "自定义": "custom",
+}
+
+METRIC_LABELS = {
+    "spend": "花费", "impressions": "展示", "clicks": "点击", "install": "安装",
+    "registration": "注册", "kyc": "KYC", "first_deposit": "首充", "trade": "交易",
+    "revenue": "收入",
+}
+
+
+def recommend_period(raw_sources: list[dict[str, Any]], goal: dict[str, Any]) -> dict[str, Any]:
+    """Recommend a period from observed coverage. A recommendation never confirms it."""
+    coverages = [source.get("date_coverage") or {} for source in raw_sources]
+    distinct_days = max((int(item.get("distinct_days") or 0) for item in coverages), default=0)
+    minimum = min((item.get("min") for item in coverages if item.get("min")), default=None)
+    maximum = max((item.get("max") for item in coverages if item.get("max")), default=None)
+    description = str(goal.get("goal_description") or goal.get("description") or "")
+    has_custom_window = bool(
+        goal.get("start") and goal.get("end")
+        or re.search(r"活动|campaign|阶段|窗口|大促", description, re.IGNORECASE)
+    )
+    if has_custom_window:
+        suggested = "custom"
+        reason = "业务目标包含活动或指定日期窗口"
+    elif distinct_days >= 60:
+        suggested = "monthly"
+        reason = f"源数据覆盖 {distinct_days} 个不同日期，适合观察自然月趋势"
+    elif distinct_days >= 14:
+        suggested = "weekly"
+        reason = f"源数据覆盖 {distinct_days} 个不同日期，适合按完整自然周复盘"
+    else:
+        suggested = "daily"
+        reason = f"源数据仅覆盖 {distinct_days} 个不同日期，优先从日报开始"
+    evidence = [reason]
+    if minimum and maximum:
+        evidence.append(f"可观测日期范围：{minimum} 至 {maximum}")
+    return {
+        "suggested_type": suggested,
+        "options": ["daily", "weekly", "monthly", "custom"],
+        "evidence": evidence,
+    }
+
+
+def selected_period(goal: dict[str, Any], recommendation: dict[str, Any]) -> dict[str, Any]:
+    raw = goal.get("period") or {}
+    if isinstance(raw, str):
+        raw = {"type": raw, "confirmed": False}
+    raw_type = PERIOD_ALIASES.get(str(raw.get("type") or "").strip().lower())
+    confirmed = bool(raw.get("confirmed")) and raw_type in {"daily", "weekly", "monthly", "custom"}
+    result: dict[str, Any] = {
+        "type": raw_type,
+        "confirmed": confirmed,
+        "recommendation": recommendation,
+    }
+    for key in ("start", "end"):
+        if raw.get(key):
+            result[key] = str(raw[key])
+    return result
+
+
+def standard_report_type(period: dict[str, Any], analysis_grain: str) -> dict[str, Any]:
+    selected = period.get("type") or period["recommendation"]["suggested_type"]
+    if selected == "custom":
+        time_scope = {
+            "mode": "multi_period", "period": "custom", "anchor": "report_date",
+            "windows": ["previous_custom", "current_custom"],
+        }
+        for key in ("start", "end"):
+            if period.get(key):
+                time_scope[key] = period[key]
+    elif selected == "weekly":
+        time_scope = {"mode": "multi_period", "period": "week", "anchor": "monday", "windows": ["previous_week", "current_week"]}
+    elif selected == "monthly":
+        time_scope = {"mode": "multi_period", "period": "month", "anchor": "month_start", "windows": ["previous_month", "current_month"]}
+    else:
+        time_scope = {"mode": "multi_period", "period": "day", "anchor": "report_date", "windows": ["previous_day", "current_day"]}
+    return {
+        "id": "standard",
+        "time_scope": time_scope,
+        "aggregation": {"grain": analysis_grain, "group_by": ["account_id"], "total_row": True},
+        "comparison": {"mode": "previous_period", "base": time_scope["windows"][0], "target": time_scope["windows"][1]},
+    }
+
+
+def standard_sheets(
+    metrics: dict[str, Any], prepared: list[dict[str, Any]], primary_metrics: list[str] | None = None
+) -> list[dict[str, Any]]:
+    primary_metrics = (primary_metrics or list(metrics))[:8]
+    available_roles = {
+        role
+        for item in prepared
+        for role in item.get("role_columns", {})
+    }
+    dimension_specs = [
+        ("account_id", "账户ID", "account_id"),
+        ("campaign_id", "Campaign ID", "campaign_id"),
+        ("adgroup_id", "Ad Group ID", "adgroup_id"),
+        ("ad_id", "Ad ID", "ad_id"),
+    ]
+    detail_dimensions = [item for item in dimension_specs if item[0] in available_roles]
+    if not detail_dimensions:
+        detail_dimensions = [("account_id", "账户ID", "account_id")]
+
+    metric_columns = [
+        {"header": METRIC_LABELS.get(name, name), "source": f"metrics.{name}", "format": "number:2"}
+        for name in primary_metrics
+    ]
+    summary_columns = [
+        {"header": "周期", "source": "$report_date", "format": "text"},
+        {"header": "对比", "source": "$const_comparison", "format": "text"},
+        *metric_columns,
+    ]
+    detail_columns = [
+        {"header": "日期", "source": "$report_date", "format": "date:yyyy-mm-dd"},
+        *[
+            {"header": label, "source": f"group.{source}", "format": "text"}
+            for _, label, source in detail_dimensions
+        ],
+        *metric_columns,
+    ]
+    trend_columns = [
+        {"header": "周期", "source": "$report_date", "format": "text"},
+        {"header": "对比", "source": "$const_comparison", "format": "text"},
+        *metric_columns,
+    ]
+    base = {
+        "match": "standard",
+        "row_key": {"field": "周期", "format": "text"},
+        "placement": {"mode": "replace_sheet", "same_key": "replace_in_place"},
+        "column_match": "by_header",
+        "style": {"inherit_from_sample": True, "apply": ["header_fill", "number_format", "column_width"]},
+    }
+    return [
+        {**base, "id": "management_summary", "target_sheet": "管理摘要", "role": "comparison", "header": {"row": 6, "auto_detect": False}, "group_by": [], "constant_columns": {"对比": ""}, "columns": summary_columns, "comparison_layout": {"mode": "block_interleaved", "block": {"rows": ["base", "current", "delta_abs", "delta_pct"], "group_by": [], "delta_label": "环比", "delta_value": "percent_number", "null_symbol": "N/A"}}},
+        {**base, "id": "detail_data", "target_sheet": "明细数据", "role": "history", "header": {"row": 2, "auto_detect": False}, "row_key": {"field": "日期", "format": "date:yyyy-mm-dd"}, "group_by": [item[2] for item in detail_dimensions], "columns": detail_columns},
+        {**base, "id": "trend_comparison", "target_sheet": "趋势环比", "role": "comparison", "header": {"row": 2, "auto_detect": False}, "group_by": [], "constant_columns": {"对比": ""}, "columns": trend_columns, "comparison_layout": {"mode": "block_interleaved", "block": {"rows": ["base", "current", "delta_abs", "delta_pct"], "group_by": [], "delta_label": "环比", "delta_value": "percent_number", "null_symbol": "N/A"}}},
+    ]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="从 probe 报告反推 profile 草稿（只产候选）")
     ap.add_argument("--probe", required=True, type=Path)
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--product", default="TODO_PRODUCT_NAME")
     ap.add_argument("--timezone", default="Asia/Shanghai")
+    ap.add_argument("--business-goal", type=Path, help="无目标模板模式的业务目标 YAML")
+    ap.add_argument("--standard-output", action="store_true", help="生成标准三 Sheet 候选 profile")
     args = ap.parse_args()
+
+    if args.standard_output and not args.business_goal:
+        ap.error("--standard-output 必须同时提供 --business-goal")
+    if args.business_goal and not args.business_goal.exists():
+        ap.error(f"业务目标文件不存在：{args.business_goal}")
 
     probe = json.loads(args.probe.read_text(encoding="utf-8"))
     raw_sources = [s for s in (probe.get("sources") or []) if "error" not in s]
@@ -406,6 +556,14 @@ def main() -> int:
             }
         )
 
+    business_goal = (
+        yaml.safe_load(args.business_goal.read_text(encoding="utf-8")) or {}
+        if args.business_goal else {}
+    )
+    if not isinstance(business_goal, dict):
+        print("业务目标 YAML 顶层必须是对象", file=sys.stderr)
+        return 2
+
     # ---------- 目标格式 ----------
     target = probe.get("target") or {}
     report_types = [
@@ -592,6 +750,69 @@ def main() -> int:
         "origin": {"type": "inferred", "verified": [], "unverified_items": len(inferences)},
     }
 
+    if args.standard_output:
+        recommendation = recommend_period(raw_sources, business_goal)
+        period = selected_period(business_goal, recommendation)
+        report_type = standard_report_type(period, analysis_grain)
+        requested_kpis = list(business_goal.get("primary_kpis") or [])
+        goal_type = str(business_goal.get("primary_goal") or "custom")
+        goal_rankings = {
+            "acquisition": ["install", "registration", "kyc", "first_deposit", "spend", "clicks", "impressions"],
+            "efficiency": ["spend", "impressions", "clicks", "install", "registration", "first_deposit"],
+            "revenue": ["revenue", "first_deposit", "trade", "spend", "install"],
+        }
+        ranked = [name for name in goal_rankings.get(goal_type, []) if name in metrics]
+        primary_kpis = [name for name in requested_kpis if name in metrics] or ranked or list(metrics)[:8]
+        sheets = standard_sheets(metrics, prepared, primary_kpis)
+        missing_requested = [name for name in requested_kpis if name not in metrics]
+        if missing_requested:
+            ambiguities.append({
+                "id": "p1_missing_requested_kpis",
+                "question": "业务目标要求的部分 KPI 在源数据中没有对应字段，是否补充数据源？",
+                "evidence": "缺失 KPI：" + "、".join(missing_requested),
+                "suggested": "当前标准报告已移除这些 KPI；不要用 0 代替缺失字段",
+                "affected": ["report_intent.primary_kpis"],
+                "level": "P1",
+                "status": "pending",
+            })
+        goal_description = str(business_goal.get("goal_description") or business_goal.get("description") or "").strip()
+        if not business_goal.get("primary_goal") and len(goal_description) < 4:
+            ambiguities.append({
+                "id": "p0_business_goal",
+                "question": "本次报告主要服务什么业务目标？",
+                "evidence": "尚未提供足以选择核心 KPI 的业务目标",
+                "suggested": "请选择 acquisition（拉新增长）、efficiency（投放效率）、revenue（收入增长），或填写自定义目标",
+                "affected": ["report_intent.primary_goal", "report_intent.primary_kpis"],
+                "level": "P0",
+                "status": "pending",
+            })
+        available_dimensions = [
+            role for role in ("date", "account_id", "country_code", "campaign_id", "adgroup_id", "ad_id")
+            if any(role in item.get("role_columns", {}) for item in prepared)
+        ]
+        profile["report_intent"] = {
+            "primary_goal": goal_type,
+            "goal_description": goal_description,
+            "period": period,
+            "comparison": {"mode": "previous_equal_period"},
+            "primary_kpis": primary_kpis,
+            "dimensions": available_dimensions,
+            "layout_confirmed": bool(business_goal.get("layout_confirmed", False)),
+        }
+        profile["report_types"] = [report_type]
+        profile["comparison_display"]["missing_previous"] = "blank"
+        workbook = next(a for a in profile["output"]["artifacts"] if a.get("kind") == "xlsx_workbook")
+        workbook["write_mode"] = "new_file_per_period"
+        workbook["target"] = {"mode": "create_copy", "sample": "standard-report-template.xlsx"}
+        workbook["sheets"] = sheets
+        inferences.append({
+            "subject": "report_intent.period",
+            "method": "date_coverage_recommendation",
+            "confidence": "medium",
+            "evidence": recommendation,
+            "status": "candidate",
+        })
+
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(
         yaml.safe_dump(profile, allow_unicode=True, sort_keys=False, width=200),
@@ -599,8 +820,13 @@ def main() -> int:
     )
 
     p0 = sum(1 for a in ambiguities if a["level"] == "P0")
+    workbook_artifact = next(
+        (artifact for artifact in profile["output"]["artifacts"] if artifact.get("kind") == "xlsx_workbook"),
+        {},
+    )
+    sheet_count = len(workbook_artifact.get("sheets") or [])
     print(f"草稿已写入 {args.out}")
-    print(f"  源 {len(profile_sources)} 个，指标 {len(metrics)} 个，派生 {len(derived)} 个，sheet {len(sheets_out)} 个")
+    print(f"  源 {len(profile_sources)} 个，指标 {len(metrics)} 个，派生 {len(derived)} 个，sheet {sheet_count} 个")
     print(f"  推断候选 {len(inferences)} 条，疑点 {len(ambiguities)} 条（P0 {p0} 条）")
     print()
     print("下一步：validate_profile.py 看还缺什么 → 逐条问 P0 → 补完再跑影子对账")
