@@ -1,0 +1,46 @@
+{
+  "name": "report-automation-skill",
+  "version": "1.0.0",
+  "description": "Reusable report automation skill with a DeepSeek Harness installer adapter",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "SKILL.md",
+    "README.md",
+    "requirements.txt",
+    "evals",
+    "examples",
+    "references",
+    "scripts",
+    "tests"
+  ],
+  "scripts": {
+    "test:dsh": "node --test tests/dsh-package.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "skill",
+    "report-automation"
+  ],
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adsstt/report-automation-skill.git"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

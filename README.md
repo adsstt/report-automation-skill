@@ -11,9 +11,22 @@
 - 口径随时间变化（字段改版）就要改代码 → 现在按日期分段配置
 - 报表逻辑散落在脚本里，没人说得清 → 现在全部落在可读的 profile 里
 
-## 三步安装
+## 安装
 
-本技能是纯 Markdown + Python 脚本，三个宿主通用。
+技能主体是 Markdown + Python 脚本，仓库根目录另外包含一个轻量 DSH 安装适配层。
+
+### DSH：直接从 Git 仓库安装
+
+在 DSH 的「插件 → 从 Git 仓库安装」中填写：
+
+```text
+https://github.com/adsstt/report-automation-skill
+```
+
+DSH 会通过 pnpm 安装适配层；适配层启动后把技能文件同步到
+`~/.agents/skills/report-automation/`。重新打开会话后即可调用。
+
+### 其他宿主：放到技能目录
 
 ### 1. 放到宿主的技能目录
 
@@ -23,9 +36,9 @@
 | Codex CLI | `~/.codex/skills/report-automation/` |
 | Claude Code | `~/.claude/skills/report-automation/` |
 
-复制整个目录即可，不需要软链。
+复制整个目录即可，不需要软链。DSH 用户使用上面的 Git 安装方式时不需要手动复制。
 
-### 2. 装依赖
+### 安装 Python 依赖
 
 ```bash
 pip install openpyxl pyyaml jsonschema
@@ -39,7 +52,7 @@ pip install -r requirements.txt
 
 要求 Python 3.10+。脚本缺依赖时会给出明确提示。
 
-### 3. 确认能被调用
+### 确认能被调用
 
 新开一个会话说「帮我做日报，这是我的源数据和目标报表」——技能应该被触发。
 没有被触发就显式说「用 report-automation 技能」。

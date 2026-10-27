@@ -1,0 +1,5 @@
+# Mount the host-side adapter. It copies the bundled report skill into the
+# DSH user skill library when the plugin starts.
+- insert:
+    - id: report-automation-skill
+      name: report-automation-skill
