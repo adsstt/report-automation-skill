@@ -14,11 +14,20 @@
     "SKILL.md",
     "README.md",
     "requirements.txt",
-    "evals",
+    "evals/evals.json",
+    "evals/fixtures",
+    "evals/fresh-product/README.md",
+    "evals/fresh-product/expected",
+    "evals/fresh-product/make_fixtures.py",
+    "evals/fresh-product/profile.confirmed.yaml",
+    "evals/fresh-product/run_acceptance.py",
+    "evals/fresh-product/samples",
+    "evals/fresh-product/sources",
     "examples",
     "references",
-    "scripts",
-    "tests"
+    "scripts/*.py",
+    "tests/*.py",
+    "tests/*.mjs"
   ],
   "scripts": {
     "test:dsh": "node --test tests/dsh-package.test.mjs"
@@ -34,6 +43,10 @@
     "report-automation"
   ],
   "license": "UNLICENSED",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/adsstt/report-automation-skill.git"

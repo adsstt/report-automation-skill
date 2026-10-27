@@ -15,7 +15,15 @@
 
 技能主体是 Markdown + Python 脚本，仓库根目录另外包含一个轻量 DSH 安装适配层。
 
-### DSH：直接从 Git 仓库安装
+### DSH：从 npm 官方源安装
+
+在 DSH 的「添加插件」中保持安装源为「npm 官方源」，输入：
+
+```text
+report-automation-skill
+```
+
+### DSH：从 Git 仓库安装
 
 在 DSH 的「插件 → 从 Git 仓库安装」中填写：
 
@@ -23,7 +31,7 @@
 https://github.com/adsstt/report-automation-skill
 ```
 
-DSH 会通过 pnpm 安装适配层；适配层启动后把技能文件同步到
+两种安装方式都会让 DSH 通过 pnpm 安装适配层；适配层启动后把技能文件同步到
 `~/.agents/skills/report-automation/`。重新打开会话后即可调用。
 
 ### 其他宿主：放到技能目录
