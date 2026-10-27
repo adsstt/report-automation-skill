@@ -1,0 +1,110 @@
+# 负样本：故意写错的配方单，用于验证 validate_profile.py 能拦住 P0 红线。
+# 期望结果：至少报出 UNRESOLVED_P0 / JOIN_GRAIN / MISSING_DEDUPE / BAD_COLUMN 四类问题。
+# 不要用这份文件生成报表。
+
+profile_version: 1
+
+product:
+  name: BadDemo
+  timezone: Asia/Shanghai
+
+report_types:
+  - id: daily
+    time_scope: { mode: single_period, period: day, anchor: report_date }
+    aggregation:
+      grain: ad
+      group_by: [account, event]
+      total_row: true
+    comparison: { mode: none }
+
+sources:
+  - id: tt_raw
+    platform: tiktok
+    role: ad_platform
+    grain: ad
+    discover:
+      dir: "inbox/tt"
+      glob: "*.xlsx"
+      pick: { strategy: latest }
+    layout: { header_row: 0, encoding: utf-8 }
+    date_column: { raw: "按天", parse: "%Y-%m-%d" }
+    observed_schema:
+      - { raw: "消耗", canonical: spend, dtype: number }
+    required_columns: [account_id, spend]
+    snapshot: { is_snapshot: false }
+
+  - id: af_campaign
+    platform: appsflyer
+    role: attribution
+    grain: campaign
+    discover:
+      dir: "inbox/af"
+      glob: "*.csv"
+      pick: { strategy: latest }
+    layout: { header_row: 0, encoding: utf-8 }
+    date_column: { raw: "Date", parse: "%Y-%m-%d" }
+    observed_schema:
+      - { raw: "Campaign ID", canonical: af_campaign_id, dtype: text }
+    required_columns: [af_campaign_id]
+    snapshot: { is_snapshot: true, snapshot_field: snapshot_date }
+
+source_plan:
+  analysis_grain: ad
+  grains_provided: [campaign, ad]
+  joins:
+    # 故意跨粒度：ad 与 campaign 关联，且 enforce_grain 与 analysis_grain 不一致
+    - id: bad_join
+      left: tt_raw
+      right: af_campaign
+      type: left
+      keys: [date, campaign_id]
+      enforce_grain: campaign
+  additive_policy:
+    forbid_cross_grain_sum: true
+    additive_measures: [spend]
+  # 故意不写 dedupe：af_campaign 是快照归因源，必须声明去重策略
+
+metrics:
+  spend: { role: spend, from: tt_raw.spend, agg: sum }
+
+  # 故意让 confirm_required 指标没有选定候选
+  first_deposit:
+    role: first_deposit
+    candidates:
+      - id: v1_activity
+        source: af_campaign
+        field: "Unique users activity days cumulative appsflyer first_deposited_v1"
+        semantics: { entity: unique_user, window: cumulative, basis: activity, variant: v1 }
+        status: candidate
+      - id: ltv_none
+        source: af_campaign
+        field: "Unique users ltv days cumulative appsflyer first_deposited"
+        semantics: { entity: unique_user, window: ltv, basis: ltv, variant: none }
+        status: candidate
+    chosen: null
+    confirm_required: true
+
+derived:
+  # 故意引用不存在的指标
+  cpa_reg:
+    expr: "spend / registration"
+    null_policy: { on_zero_denominator: blank }
+    display: { decimals: 2 }
+
+output:
+  artifacts:
+    - kind: xlsx_workbook
+      target: { mode: append_to_sample, sample: "samples/missing.xlsx" }
+      sheets:
+        - id: history_daily
+          match: daily
+          role: history
+          row_key: { field: "日期", format: "yyyy-mm-dd" }
+          placement: { mode: append_bottom, same_key: replace_in_place }
+          total_row: { enabled: true, position: bottom, label_column: "账户名称", label: "总计" }
+          columns:
+            - { header: "日期", source: "$report_date", format: "date:yyyy-mm-dd" }
+            # 故意引用不存在的指标
+            - { header: "注册", source: "metrics.registration", format: "number:0" }
+            # 故意引用不在 group_by 里的维度
+            - { header: "国家", source: "group.country", format: "text" }

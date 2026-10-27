@@ -1,0 +1,214 @@
+profile_version: 1
+product:
+  name: NovaFit
+  client: Fresh User Labs
+  timezone: Asia/Shanghai
+
+report_types:
+  - id: daily
+    time_scope: {mode: single_period, period: day, anchor: report_date}
+    aggregation:
+      grain: ad
+      group_by: [account, account_id, event, country, country_code]
+      total_row: false
+    comparison: {mode: same_point_prev_day}
+
+sources:
+  - id: meta_ads
+    platform: meta
+    role: ad_platform
+    grain: ad
+    discover:
+      dir: sources
+      glob: "*/meta_ads_*.xlsx"
+      pick: {strategy: latest_batch_by_date, batch_key: report_date}
+    layout: {header_row: 1, sheet: Export, encoding: utf-8}
+    date_column: {raw: Day, parse: "%Y-%m-%d"}
+    observed_schema:
+      - {raw: Day, canonical: date, dtype: date}
+      - {raw: Account ID, canonical: account_id, dtype: text}
+      - {raw: Account Name, canonical: account_name, dtype: text}
+      - {raw: Campaign ID, canonical: campaign_id, dtype: text}
+      - {raw: Campaign Name, canonical: campaign_name, dtype: text}
+      - {raw: Ad Set ID, canonical: adgroup_id, dtype: text}
+      - {raw: Ad Set Name, canonical: adgroup_name, dtype: text}
+      - {raw: Ad ID, canonical: ad_id, dtype: text}
+      - {raw: Ad Name, canonical: ad_name, dtype: text}
+      - {raw: Spend, canonical: spend, dtype: number}
+      - {raw: Impressions, canonical: impressions, dtype: number}
+      - {raw: Clicks, canonical: clicks, dtype: number}
+      - {raw: Installs, canonical: install, dtype: number}
+    required_columns: [date, account_id, campaign_id, adgroup_id, ad_id, spend]
+    snapshot: {is_snapshot: false}
+
+  - id: adjust_events
+    platform: adjust
+    role: attribution
+    grain: ad
+    discover:
+      dir: sources
+      glob: "*/adjust_attribution_*.csv"
+      pick: {strategy: latest_batch_by_date, batch_key: report_date}
+    layout: {header_row: 0, encoding: utf-8, csv_delimiter: ","}
+    date_column: {raw: Date, parse: "%Y-%m-%d"}
+    observed_schema:
+      - {raw: Date, canonical: date, dtype: date}
+      - {raw: Account ID, canonical: account_id, dtype: text}
+      - {raw: Ad ID, canonical: ad_id, dtype: text}
+      - {raw: Snapshot Date, canonical: snapshot_date, dtype: date}
+      - {raw: signup_success, canonical: registration, dtype: number}
+      - {raw: kyc_successed, canonical: kyc, dtype: number}
+      - {raw: first_deposited, canonical: first_deposit, dtype: number}
+      - {raw: Revenue USD, canonical: revenue, dtype: number}
+    required_columns: [date, account_id, ad_id, registration, kyc, first_deposit, revenue]
+    snapshot: {is_snapshot: true, snapshot_field: snapshot_date}
+
+source_plan:
+  analysis_grain: ad
+  grains_provided: [ad]
+  joins:
+    - id: meta_x_adjust
+      left: meta_ads
+      right: adjust_events
+      type: left
+      keys: [date, account_id, ad_id]
+      enforce_grain: ad
+  additive_policy:
+    forbid_cross_grain_sum: true
+    additive_measures: [spend, impressions, clicks, install, 注册, KYC, FTD_Actual, 收入]
+  dedupe:
+    - source: adjust_events
+      key: [date, account_id, ad_id]
+      keep: latest_snapshot
+  unmatched_policy: {keep_left: true, report: true, label: 未匹配}
+
+metrics:
+  spend: {role: spend, from: meta_ads.spend, agg: sum}
+  impressions: {role: impressions, from: meta_ads.impressions, agg: sum}
+  clicks: {role: clicks, from: meta_ads.clicks, agg: sum}
+  install: {role: install, from: meta_ads.install, agg: sum}
+  注册: {role: registration, from: adjust_events.registration, agg: sum}
+  KYC: {role: kyc, from: adjust_events.kyc, agg: sum}
+  FTD_Actual: {role: first_deposit, from: adjust_events.first_deposit, agg: sum}
+  收入: {role: revenue, from: adjust_events.revenue, agg: sum}
+
+derived:
+  cpa_reg:
+    expr: spend / 注册
+    null_policy: {on_zero_denominator: blank, on_missing_numerator: blank}
+    display: {decimals: 2, unit: USD}
+
+comparison_display:
+  missing_previous: zero
+  new_when_previous_zero: 新增
+  drop_to_zero: "-100.00%"
+  invalid_derived: blank
+  positive_color: green
+  negative_color: red
+  zero_color: gray
+
+output:
+  artifacts:
+    - kind: xlsx_workbook
+      write_mode: append_to_sample
+      target: {mode: append_to_sample, sample: samples/target_template.xlsx}
+      sheets:
+        - id: daily_history
+          match: daily
+          target_sheet: Daily History
+          role: history
+          header: {row: 1, auto_detect: true}
+          row_key: {field: 日期, format: "date:yyyy-mm-dd"}
+          placement: {mode: append_bottom, same_key: replace_in_place}
+          column_match: by_header
+          group_labeling: repeat
+          group_by: [账户名称, 账户ID, 国家名称, 国家代码, 事件]
+          total_row: {enabled: false}
+          columns:
+            - {header: 日期, source: $report_date, format: "date:yyyy-mm-dd"}
+            - {header: 账户名称, source: group.account, format: text}
+            - {header: 账户ID, source: group.account_id, format: text}
+            - {header: 国家名称, source: group.country, format: text}
+            - {header: 国家代码, source: group.country_code, format: text}
+            - {header: 事件, source: group.event, format: text}
+            - {header: 花费, source: metrics.spend, format: "number:2"}
+            - {header: 注册, source: metrics.注册, format: "number:0"}
+            - {header: KYC, source: metrics.KYC, format: "number:0"}
+            - {header: FTD, source: metrics.FTD_Actual, format: "number:0"}
+            - {header: 收入, source: metrics.收入, format: "number:2"}
+            - {header: 注册成本, source: derived.cpa_reg, format: "number:2"}
+        - id: daily_comparison
+          match: daily
+          target_sheet: Daily Comparison
+          role: comparison
+          header: {row: 1, auto_detect: true}
+          row_key: {field: 日期, format: "date:yyyy-mm-dd"}
+          placement: {mode: append_bottom, same_key: replace_in_place}
+          column_match: by_header
+          group_labeling: sparse
+          group_by: [国家名称]
+          columns:
+            - {header: 日期, source: $report_date, format: "date:yyyy-mm-dd"}
+            - {header: 国家, source: group.country, format: text}
+            - {header: 花费, source: metrics.spend, format: "percent:2"}
+            - {header: 注册, source: metrics.注册, format: "percent:2"}
+            - {header: KYC, source: metrics.KYC, format: "percent:2"}
+            - {header: FTD, source: metrics.FTD_Actual, format: "percent:2"}
+            - {header: 收入, source: metrics.收入, format: "percent:2"}
+          comparison_layout:
+            mode: block_interleaved
+            block:
+              rows: [base, current, delta]
+              group_by: [country]
+              delta_label: 环比
+              delta_value: raw_ratio
+              null_symbol: "/"
+    - kind: csv
+      role: process_table
+      grain: ad
+      path: output/过程表_{report_type}_{date}.csv
+    - kind: csv
+      role: result_table
+      group_by: [账户名称, 账户ID, 事件, 国家名称, 国家代码]
+      path: output/结果表_{report_type}_{date}.csv
+  drafts:
+    dir: _drafts
+    naming: "{artifact}_{report_type}_{date}_DRAFT"
+    banner: 诊断草稿-非正式交付
+
+rules:
+  platform_label: Meta
+  source_batch_label: NovaFit日报
+  unknown_event: Unknown
+  join_coverage_threshold: 1.0
+  event_classification:
+    field_priority: [campaign_name, adgroup_name]
+    patterns: {注册: REG}
+  country_lookup:
+    from: campaign_name
+    split: _
+
+validation:
+  default_on_failure: block
+  checks:
+    - {id: total_reconcile, rule: 所有可加指标过程表与结果表合计一致, tolerance: 0.01, level: blocking}
+    - {id: row_count, rule: 当前样本应输出两个国家分组, level: blocking}
+  draft_channel:
+    enabled: true
+    requires_explicit_user_request: true
+    location: _drafts
+    must_not_mix_with_official: true
+
+verification:
+  - type: probe
+    at: "2026-10-27"
+    evidence: {scenario: NovaFit fresh-product acceptance}
+    result: pass
+  - type: shadow_diff
+    at: "2026-10-27"
+    evidence: {expected_rows: 2, expected_total_spend: 300}
+    result: pass
+origin:
+  type: from_scratch
+  verified: [probe, shadow_diff]
+  unverified_items: 0

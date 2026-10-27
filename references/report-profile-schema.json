@@ -1,0 +1,777 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://llm-wiki-lab/report-automation/report-profile-schema.json",
+  "title": "Report Profile（报表配方单）",
+  "description": "一套报表的完整契约：源文件怎么读、指标怎么算、结果怎么写进目标格式。只描述结构，语义红线由 validate_profile.py 负责。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile_version", "product", "report_types", "sources", "source_plan", "metrics", "output"],
+  "properties": {
+    "profile_version": { "const": 1 },
+    "product": { "$ref": "#/$defs/product" },
+    "accounts": { "$ref": "#/$defs/accounts" },
+    "report_types": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/report_type" }
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/source" }
+    },
+    "source_plan": { "$ref": "#/$defs/source_plan" },
+    "rules": {
+      "type": "object",
+      "description": "声明式业务规则：事件分类、国家映射、端口派生、归因匹配偏好、展示过滤等。具体子结构在 P1 阶段先宽松允许，P2 收紧。",
+      "additionalProperties": true
+    },
+    "metrics": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/metric" }
+    },
+    "dimensions": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/dimension" }
+    },
+    "derived": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/derived" }
+    },
+    "comparison_display": { "$ref": "#/$defs/comparison_display" },
+    "output": { "$ref": "#/$defs/output" },
+    "validation": { "$ref": "#/$defs/validation" },
+    "ambiguities": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ambiguity" }
+    },
+    "inference": { "$ref": "#/$defs/inference" },
+    "verification": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/verification" }
+    },
+    "origin": { "$ref": "#/$defs/origin" },
+    "provenance": { "$ref": "#/$defs/provenance" }
+  },
+
+  "$defs": {
+    "product": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "timezone"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "client": { "type": "string" },
+        "timezone": { "type": "string", "minLength": 1 }
+      }
+    },
+
+    "accounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "include": { "type": "array", "items": { "type": "string" } },
+        "exclude": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "report_type": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "time_scope", "aggregation", "comparison"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "time_scope": { "$ref": "#/$defs/time_scope" },
+        "aggregation": { "$ref": "#/$defs/aggregation" },
+        "comparison": { "$ref": "#/$defs/comparison" }
+      }
+    },
+
+    "time_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": { "enum": ["single_period", "multi_period", "rolling_window"] },
+        "period": { "enum": ["day", "week", "month"] },
+        "anchor": { "enum": ["report_date", "monday", "month_start"] },
+        "point": { "type": "string" },
+        "windows": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "type": "string" }
+        },
+        "require_complete": { "type": "boolean" },
+        "rolling_days": { "type": "integer", "minimum": 1 }
+      }
+    },
+
+    "aggregation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["grain", "group_by"],
+      "properties": {
+        "grain": { "enum": ["campaign", "adgroup", "ad", "creative"] },
+        "group_by": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": ["account", "account_id", "event", "platform", "country", "country_code", "campaign", "campaign_id", "adgroup", "adgroup_id", "ad", "ad_id", "creative"]
+          }
+        },
+        "total_row": { "type": "boolean" }
+      }
+    },
+
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": { "enum": ["none", "same_point_prev_day", "previous_period", "sequential_trend"] },
+        "source_point": { "type": "string" },
+        "base": { "type": "string" },
+        "target": { "type": "string" }
+      }
+    },
+
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "platform", "role", "grain", "discover", "layout", "date_column", "required_columns"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "platform": { "enum": ["tiktok", "meta", "google", "appsflyer", "adjust", "unknown"] },
+        "role": { "enum": ["ad_platform", "attribution", "screenshot"] },
+        "grain": { "enum": ["campaign", "adgroup", "ad", "creative"] },
+        "discover": { "$ref": "#/$defs/discover" },
+        "layout": { "$ref": "#/$defs/layout" },
+        "date_column": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["raw", "parse"],
+          "properties": {
+            "raw": { "type": "string" },
+            "parse": { "type": "string" }
+          }
+        },
+        "observed_schema": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["raw", "canonical", "dtype"],
+            "properties": {
+              "raw": { "type": "string" },
+              "canonical": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+              "dtype": { "enum": ["text", "number", "date", "percent", "bool"] }
+            }
+          }
+        },
+        "required_columns": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+        },
+        "snapshot": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["is_snapshot"],
+          "properties": {
+            "is_snapshot": { "type": "boolean" },
+            "snapshot_field": { "type": "string" },
+            "maturity": {
+              "type": "object",
+              "additionalProperties": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      }
+    },
+
+    "discover": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dir", "glob", "pick"],
+      "properties": {
+        "dir": { "type": "string" },
+        "glob": { "type": "string" },
+        "pick": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["strategy"],
+          "properties": {
+            "strategy": { "enum": ["latest_batch_by_date", "latest", "explicit"] },
+            "batch_key": { "type": "string" }
+          }
+        }
+      }
+    },
+
+    "layout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["header_row", "encoding"],
+      "properties": {
+        "header_row": { "type": "integer", "minimum": 0 },
+        "sheet": { "type": ["integer", "string"] },
+        "encoding": { "type": "string" },
+        "csv_delimiter": { "type": "string" }
+      }
+    },
+
+    "source_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["analysis_grain", "grains_provided", "joins", "additive_policy"],
+      "properties": {
+        "analysis_grain": { "enum": ["campaign", "adgroup", "ad", "creative"] },
+        "grains_provided": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["campaign", "adgroup", "ad", "creative"] }
+        },
+        "joins": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/join" }
+        },
+        "additive_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["forbid_cross_grain_sum", "additive_measures"],
+          "properties": {
+            "forbid_cross_grain_sum": { "const": true },
+            "additive_measures": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string" }
+            }
+          }
+        },
+        "dedupe": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source", "key", "keep"],
+            "properties": {
+              "source": { "type": "string" },
+              "key": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+              "keep": { "enum": ["latest_snapshot", "first", "last"] }
+            }
+          }
+        },
+        "unmatched_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "keep_left": { "type": "boolean" },
+            "report": { "type": "boolean" },
+            "label": { "type": "string" }
+          }
+        }
+      }
+    },
+
+    "join": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "left", "right", "type", "keys", "enforce_grain"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "left": { "type": "string" },
+        "right": { "type": "string" },
+        "type": { "enum": ["left", "inner"] },
+        "keys": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "enforce_grain": { "enum": ["campaign", "adgroup", "ad", "creative"] }
+      }
+    },
+
+    "metric": {
+      "oneOf": [
+        { "$ref": "#/$defs/metric_direct" },
+        { "$ref": "#/$defs/metric_candidates" },
+        { "$ref": "#/$defs/metric_ref" }
+      ]
+    },
+
+    "metric_direct": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role"],
+      "properties": {
+        "role": { "$ref": "#/$defs/metric_role" },
+        "from": { "type": "string", "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$" },
+        "agg": { "enum": ["sum", "count", "count_distinct", "max", "avg", "min"] },
+        "confirm_required": { "type": "boolean" },
+        "display_only": { "type": "boolean" },
+        "effective": { "$ref": "#/$defs/effective" }
+      },
+      "oneOf": [
+        { "required": ["from", "agg"] },
+        { "required": ["effective"] }
+      ]
+    },
+
+    "effective": {
+      "type": "array",
+      "minItems": 1,
+      "description": "口径随时间变化的字段选择。按 report_date 从上到下取第一个命中的分段。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "from": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+          "before": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+          "field": { "type": "string", "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$" },
+          "candidate_ref": { "type": "string" },
+          "note": { "type": "string" }
+        }
+      }
+    },
+
+    "metric_candidates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "candidates", "chosen", "confirm_required"],
+      "properties": {
+        "role": { "$ref": "#/$defs/metric_role" },
+        "candidates": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "source", "field", "semantics", "status"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+              "source": { "type": "string" },
+              "field": { "type": "string", "minLength": 1 },
+              "semantics": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["entity", "window", "basis"],
+                "properties": {
+                  "entity": { "enum": ["unique_user", "event", "revenue"] },
+                  "window": { "enum": ["daily", "cumulative", "ltv"] },
+                  "basis": { "type": "string" },
+                  "variant": { "type": "string" }
+                }
+              },
+              "doc": { "type": "string" },
+              "status": { "enum": ["candidate", "confirmed", "rejected"] }
+            }
+          }
+        },
+        "chosen": { "type": ["string", "null"] },
+        "confirm_required": { "const": true },
+        "display_only": { "type": "boolean" }
+      }
+    },
+
+    "metric_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "candidate_ref", "display_only"],
+      "properties": {
+        "role": { "$ref": "#/$defs/metric_role" },
+        "candidate_ref": { "type": "string" },
+        "display_only": { "const": true }
+      }
+    },
+
+    "metric_role": {
+      "enum": ["spend", "impressions", "clicks", "install", "registration", "kyc", "first_deposit", "purchase", "trade", "revenue", "retention"]
+    },
+
+    "dimension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "agg"],
+      "properties": {
+        "from": { "type": "string", "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$" },
+        "agg": { "enum": ["first", "last", "max", "min"] },
+        "note": { "type": "string" }
+      }
+    },
+
+    "derived": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expr", "null_policy"],
+      "properties": {
+        "expr": { "type": "string", "minLength": 1 },
+        "null_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "on_zero_denominator": { "enum": ["blank", "zero", "label"] },
+            "on_missing_numerator": { "enum": ["blank", "zero", "label"] },
+            "label": { "type": "string" }
+          }
+        },
+        "display": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "decimals": { "type": "integer", "minimum": 0, "maximum": 6 },
+            "unit": { "type": "string" },
+            "percent": { "type": "boolean" }
+          }
+        }
+      }
+    },
+
+    "comparison_display": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "missing_previous": { "enum": ["zero", "blank"] },
+        "new_when_previous_zero": { "type": "string" },
+        "drop_to_zero": { "type": "string" },
+        "invalid_derived": { "enum": ["blank", "label"] },
+        "positive_color": { "type": "string" },
+        "negative_color": { "type": "string" },
+        "zero_color": { "type": "string" }
+      }
+    },
+
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifacts"],
+      "properties": {
+        "format_id": { "type": "string", "description": "目标格式版本标识，如 product-daily-v1" },
+        "format_history": {
+          "type": "array",
+          "description": "客户改版记录：每次改表头/加列都记一笔，便于回溯与回归",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "date": { "type": "string" },
+              "format_id": { "type": "string" },
+              "change": { "type": "string" }
+            }
+          }
+        },
+        "artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "oneOf": [
+              { "$ref": "#/$defs/artifact_workbook" },
+              { "$ref": "#/$defs/artifact_csv" }
+            ]
+          }
+        },
+        "drafts": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "dir": { "type": "string" },
+            "naming": { "type": "string" },
+            "banner": { "type": "string" }
+          }
+        }
+      }
+    },
+
+    "artifact_workbook": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "target", "sheets"],
+      "properties": {
+        "kind": { "const": "xlsx_workbook" },
+        "write_mode": { "enum": ["append_to_sample", "new_file_per_period"] },
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "sample"],
+          "properties": {
+            "mode": { "enum": ["append_to_sample", "create_copy"] },
+            "sample": { "type": "string" }
+          }
+        },
+        "sheets": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/sheet" }
+        }
+      }
+    },
+
+    "sheet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "match", "role", "row_key", "placement", "columns"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "match": { "type": "string" },
+        "target_sheet": { "type": "string", "description": "目标工作簿里的实际 sheet 名（表头版本化/多 sheet 时必填）" },
+        "role": { "enum": ["history", "comparison"] },
+        "header": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "row": { "type": "integer", "minimum": 0 },
+            "auto_detect": { "type": "boolean" }
+          }
+        },
+        "row_key": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["field", "format"],
+          "properties": {
+            "field": { "type": "string" },
+            "format": { "type": "string" }
+          }
+        },
+        "column_match": { "enum": ["by_header", "by_position"] },
+        "group_labeling": { "enum": ["repeat", "sparse"] },
+        "group_by": {
+          "type": "array",
+          "description": "该 sheet 自己的分组维度（如按 日期×国家 铺行）；缺省沿用 report_type.aggregation.group_by",
+          "items": { "type": "string" }
+        },
+        "filter": {
+          "type": "object",
+          "description": "该 sheet 的行筛选条件，例如按事件拆成多个 sheet：{event: 注册}",
+          "additionalProperties": { "type": "string" }
+        },
+        "constant_columns": {
+          "type": "object",
+          "description": "固定值列（如备注、ROI 留空），key 为目标列名",
+          "additionalProperties": true
+        },
+        "placement": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "same_key"],
+          "properties": {
+            "mode": { "enum": ["append_bottom", "replace_sheet"] },
+            "same_key": { "enum": ["replace_in_place", "append"] }
+          }
+        },
+        "total_row": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "position": { "enum": ["bottom", "top"] },
+            "label_column": { "type": "string" },
+            "label": { "type": "string" }
+          }
+        },
+        "columns": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/column" }
+        },
+        "style": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "inherit_from_sample": { "type": "boolean" },
+            "apply": {
+              "type": "array",
+              "items": { "enum": ["header_fill", "number_format", "conditional_color", "column_width"] }
+            }
+          }
+        },
+        "comparison_layout": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": {
+            "mode": { "enum": ["delta_columns", "block_interleaved", "separate_sheet"] },
+            "block": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "rows": {
+                  "type": "array",
+                  "minItems": 2,
+                  "items": { "enum": ["base", "current", "delta"] }
+                },
+                "group_by": { "type": "array", "items": { "type": "string" } },
+                "delta_label": { "type": "string" },
+                "delta_value": { "enum": ["raw_ratio", "percent_number"] },
+                "null_symbol": { "type": "string" }
+              }
+            },
+            "row_axis": { "type": "array", "items": { "type": "string" } },
+            "column_axis": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    },
+
+    "column": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["header", "source", "format"],
+      "properties": {
+        "header": { "type": "string", "minLength": 1 },
+        "aliases": {
+          "type": "array",
+          "description": "目标表头的历史/变体写法，按列名匹配时都算命中（客户改版不崩）",
+          "items": { "type": "string" }
+        },
+        "column_order": { "type": "integer", "minimum": 0 },
+        "source": {
+          "type": "string",
+          "description": "取值来源：$常量 / group.* / metrics.* / derived.* / comparison.* / dimensions.*。键名允许中文与大写（与目标列名/指标键保持一致）",
+          "pattern": "^(\\$[A-Za-z_\u4e00-\u9fff]+|(group|metrics|derived|comparison|dimensions)(\\.[^\\s.]+)+)$"
+        },
+        "format": {
+          "type": "string",
+          "pattern": "^(text|number:[0-6]|percent:[0-6]|date:.+)$"
+        },
+        "colorize": { "type": "boolean" }
+      }
+    },
+
+    "artifact_csv": {
+      "type": "object",
+      "description": "P1 阶段先宽松允许额外键（rows_filter / column_rename 等），P2 收紧。",
+      "additionalProperties": true,
+      "required": ["kind", "role", "path"],
+      "properties": {
+        "kind": { "const": "csv" },
+        "role": { "enum": ["process_table", "result_table"] },
+        "path": { "type": "string", "minLength": 1 },
+        "grain": { "enum": ["account", "campaign", "adgroup", "ad", "creative"] },
+        "group_by": { "type": "array", "items": { "type": "string" } },
+        "rows_filter": { "type": "string" }
+      }
+    },
+
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["default_on_failure", "checks"],
+      "properties": {
+        "default_on_failure": { "const": "block" },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "level"],
+            "properties": {
+              "id": { "type": "string" },
+              "rule": { "type": "string" },
+              "tolerance": { "type": "number", "minimum": 0 },
+              "level": { "enum": ["blocking", "advisory"] }
+            }
+          }
+        },
+        "draft_channel": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "requires_explicit_user_request": { "const": true },
+            "location": { "type": "string" },
+            "must_not_mix_with_official": { "const": true }
+          }
+        }
+      }
+    },
+
+    "ambiguity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "question", "level", "status"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "question": { "type": "string", "minLength": 1 },
+        "evidence": { "type": "string" },
+        "suggested": { "type": "string" },
+        "affected": { "type": "array", "items": { "type": "string" } },
+        "level": { "enum": ["P0", "P1", "P2"] },
+        "status": { "enum": ["pending", "confirmed", "rejected"] },
+        "decided_by": { "type": "string" },
+        "written_to_rule": { "type": "string" }
+      }
+    },
+
+    "inference": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "generated_at": { "type": "string" },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "subject": { "type": "string" },
+              "method": { "type": "string" },
+              "confidence": { "enum": ["high", "medium", "low"] },
+              "evidence": { "type": "object" },
+              "status": { "enum": ["candidate", "confirmed", "rejected"] }
+            }
+          }
+        },
+        "freeze_requirements": { "type": "object" }
+      }
+    },
+
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "at", "evidence", "result"],
+      "properties": {
+        "type": { "enum": ["probe", "shadow_diff", "fit_check"] },
+        "at": { "type": "string", "minLength": 1 },
+        "evidence": {
+          "type": "object",
+          "minProperties": 1
+        },
+        "result": { "enum": ["pass", "fail"] }
+      }
+    },
+
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "enum": ["from_example", "from_scratch", "inferred"] },
+        "based_on": { "type": "string" },
+        "verified": {
+          "type": "array",
+          "items": { "enum": ["probe", "shadow_diff", "fit_check"] }
+        },
+        "unverified_items": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "created_at": { "type": "string" },
+        "sample_files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "sha256"],
+            "properties": {
+              "path": { "type": "string" },
+              "sha256": { "type": "string" }
+            }
+          }
+        },
+        "doc_urls": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

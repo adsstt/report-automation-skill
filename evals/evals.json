@@ -1,0 +1,72 @@
+{
+  "skill_name": "report-automation",
+  "evals": [
+    {
+      "id": 1,
+      "name": "first-time-onboarding-new-product",
+      "prompt": "我负责一个新产品的投放，现在每天都得手工贴日报。这是我最近一天的 TikTok 导出和 AppsFlyer 导出，还有我做好的一份客户日报 Excel。能帮我把这件事自动化吗？以后我只想丢源文件就出报表。",
+      "expected_output": "触发 report-automation，先跑 probe 探源与目标格式，生成带候选与 P0 疑点的 profile 草稿，并逐条向用户确认口径（不擅自拍板）",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "daily-run-existing-profile",
+      "prompt": "用之前配好的配方单出 2026-10-25 的日报，源文件在附件里。",
+      "expected_output": "直接走 generate_report / render_workbook，不再重新问口径；出稿后跑 verify_output 与 verify_workbook，报告校验结果",
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "client-renamed-headers",
+      "prompt": "客户把日报表头改了：注册数变成 注册数(sign_success_api)，KYC 变成 KYC(KYC_successed)，还多了一列 FTD LTV。之前的模板不能用了，怎么办？",
+      "expected_output": "用 verify_format 核对差异，通过 aliases 兼容旧写法、补 format_history 与新列，不改引擎代码",
+      "files": []
+    },
+    {
+      "id": 4,
+      "name": "metric-definition-changed-by-date",
+      "prompt": "我们发现 AppsFlyer 从 10-25 起导出的 FTD 列多了一个 _v1 后缀的版本，数值和旧的还不一样。历史报表不能改，新的一天要用新的口径。",
+      "expected_output": "用 metrics.effective 做口径分段（from/before），而不是改常量；重跑历史日期仍命中旧段",
+      "files": []
+    },
+    {
+      "id": 5,
+      "name": "ambiguous-field-must-ask",
+      "prompt": "源数据里 FTD 有好几列，你随便挑一个能算出数的就行，别老问我。",
+      "expected_output": "拒绝擅自选择：说明口径猜错会导致客户数字错，把候选字段与语义差异列成 P0 问题请用户确认",
+      "files": []
+    },
+    {
+      "id": 6,
+      "name": "validation-failed-should-block",
+      "prompt": "报表跑完了但总数对不上，先给我一份吧，我急着发给客户。",
+      "expected_output": "默认阻断正式交付（不产出正式报表）；仅当用户明确要求时生成 _drafts/ 下的诊断草稿，并说明差异定位",
+      "files": []
+    },
+    {
+      "id": 7,
+      "name": "reuse-example-should-be-gated",
+      "prompt": "我看 examples/minimal 里有个配好的 profile，直接拿它给我的产品出报表行不行？",
+      "expected_output": "说明示例只读、必须复制并重跑 probe + 影子对账；用 verify_profile_fit 检查适配度，不达标要拒绝",
+      "files": []
+    },
+    {
+      "id": 8,
+      "name": "should-not-trigger-unrelated",
+      "prompt": "帮我把这份 PDF 里的表格提取成 CSV。",
+      "expected_output": "不应触发本技能（属于文档解析，走 firecrawl-parse 等技能）",
+      "files": []
+    },
+    {
+      "id": 9,
+      "name": "fresh-product-end-to-end",
+      "prompt": "用一套从未接入过的产品数据验证完整报表自动化流程。",
+      "expected_output": "NovaFit Meta×Adjust 场景先生成带 P0 的 infer 草稿；确认 profile 后，数值对账、影子 diff 和工作簿回归全部通过。",
+      "files": [
+        "fresh-product/profile.confirmed.yaml",
+        "fresh-product/run_acceptance.py",
+        "fresh-product/samples/target_template.xlsx"
+      ]
+    }
+  ]
+}

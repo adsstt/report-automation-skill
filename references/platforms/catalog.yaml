@@ -1,0 +1,21 @@
+platforms:
+  tiktok:
+    role: ad_platform
+    prefix: tt
+    patterns: [tiktok, "推广系列id", "创意素材 id", "消耗"]
+  meta:
+    role: ad_platform
+    prefix: meta
+    patterns: [facebook, meta, "ad set id", "adset id", "amount spent"]
+  google:
+    role: ad_platform
+    prefix: gg
+    patterns: [google ads, "ad group id", "cost"]
+  appsflyer:
+    role: attribution
+    prefix: af
+    patterns: [appsflyer, "unique users activity", "unique users ltv"]
+  adjust:
+    role: attribution
+    prefix: adj
+    patterns: [adjust, tracker_token, network_token]

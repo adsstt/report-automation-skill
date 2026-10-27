@@ -1,0 +1,59 @@
+# 业务聚合层（三层国家码表的第 2 层）
+#
+# 优先级：profile 覆盖层 > 本文件 > ISO 基础层（iso3166-1.zh.json）> Unknown（告警）
+#
+# 本层解决两件 ISO 码表表达不了的事：
+#   1. 聚合区域码（ME / LATAM 这类不是国家的"码"）
+#   2. 既有报表用过的写法（别名、组合特例、客户习惯译名）
+
+_meta:
+  layer: business_aggregates
+  last_updated: "2026-10-26"
+  note: >
+    口径来源为现行产线 extend_country_map() 与国家映射约定；新增市场优先补 ISO 基础层，
+    只有"区域聚合"与"客户特殊写法"才放这里。
+
+# 聚合码：不是国家，不能靠 ISO 翻译。
+# 重要：这里只放「现行产线国家表里确实存在」的聚合码，否则会改变历史解析结果
+# （实测：Campaign 含 LATAM 时产线直接命中"拉丁美洲"，不会回退到广告组里的具体国家）。
+aggregates:
+  ME: 中东
+  UAE: 中东
+  LATAM: 拉丁美洲
+
+# 可选聚合码：产线目前没有，默认不启用。启用前必须评估对历史解析的影响。
+optional_aggregates:
+  MEA: 中东及非洲
+  SEA: 东南亚
+  EEA: 欧洲经济区
+  CIS: 独联体
+
+# 别名：历史/变体写法 → 标准 ISO 码
+aliases:
+  VNM: VN
+  ARG: AR
+  UAE_: AE
+
+# 组合特例：整组优先匹配，命中后不再逐码翻译
+special_combos:
+  "GB&CA":
+    name: 加拿大&英国
+    code: "GB&CA"
+    note: 产线固定写法，顺序与普通组合相反
+  "ARG&MX":
+    name: 阿根廷&墨西哥
+    code: "ARG&MX"
+
+# 客户习惯译名：覆盖 ISO 层的标准译名（避免跨期国家名漂移）
+display_overrides:
+  DO: 多米尼加共和国
+  HK: 中国香港
+  TW: 中国台湾
+
+# 遇到不认识的码怎么办
+unknown_policy:
+  action: warn
+  placeholder: Unknown
+  note: >
+    现行产线遇到不认识的码会静默变成 Unknown。本工具改为显式告警并计入校验清单，
+    避免交付物里出现无人察觉的 Unknown。

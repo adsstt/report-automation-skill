@@ -1,0 +1,21 @@
+﻿profile_version: 1
+product: { name: X, timezone: Asia/Shanghai }
+report_types:
+  - id: daily
+    time_scope: { mode: single_period, period: day, anchor: report_date }
+    aggregation: { grain: ad, group_by: [account] }
+    comparison: { mode: none }
+sources:
+  - id: tt_raw
+    platform: tiktok
+    role: ad_platform
+    grain: ad
+    discover: { dir: a, glob: b, pick: { strategy: latest } }
+    layout: { header_row: 0, encoding: utf-8 }
+    date_column: { raw: d, parse: "%Y-%m-%d" }
+    required_columns: [account_id]
+source_plan:
+  analysis_grain: ad
+  grains_provided: [ad]
+  joins: []
+  additive_policy: { forbid_cross_grain_sum: true, additive_measures: [spend] }

@@ -1,0 +1,14 @@
+{
+  "fixtures": [
+    {
+      "path": "invalid_profile.yaml",
+      "expected_exit": 1,
+      "purpose": "semantic P0 and cross-grain validation failures"
+    },
+    {
+      "path": "schema_broken.yaml",
+      "expected_exit": 1,
+      "purpose": "required schema fields are missing"
+    }
+  ]
+}

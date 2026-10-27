@@ -1,0 +1,156 @@
+# 最小可用配方单（示例）
+#
+# 目的：给新用户/接手的 AI 一个"及格线"参考——一份配方单最少要写清什么。
+# 场景：虚构产品 DemoApp，只有 TikTok 投放 + AppsFlyer 归因，只做日报，输出 CSV。
+#
+# 校验：python scripts/validate_profile.py examples/minimal/profile.yaml
+
+profile_version: 1
+
+product:
+  name: DemoApp
+  client: DemoClient
+  timezone: Asia/Shanghai
+
+accounts:
+  include: []
+  exclude: []
+
+report_types:
+  - id: daily
+    time_scope:
+      mode: single_period
+      period: day
+      anchor: report_date
+    aggregation:
+      grain: ad
+      group_by: [account, event, country, country_code]
+      total_row: true
+    comparison:
+      mode: none
+
+sources:
+  - id: tt_raw
+    platform: tiktok
+    role: ad_platform
+    grain: ad
+    discover:
+      dir: "inbox/tt"
+      glob: "TikTokAds_*.xlsx"
+      pick:
+        strategy: latest_batch_by_date
+        batch_key: report_date
+    layout:
+      header_row: 0
+      sheet: 0
+      encoding: utf-8
+    date_column:
+      raw: "按天"
+      parse: "%Y-%m-%d"
+    observed_schema:
+      - { raw: "账户 ID", canonical: account_id, dtype: text }
+      - { raw: "账户名称", canonical: account_name, dtype: text }
+      - { raw: "推广系列ID", canonical: campaign_id, dtype: text }
+      - { raw: "广告组ID", canonical: adgroup_id, dtype: text }
+      - { raw: "创意素材 ID", canonical: creative_id, dtype: text }
+      - { raw: "消耗", canonical: spend, dtype: number }
+      - { raw: "展示量", canonical: impressions, dtype: number }
+      - { raw: "点击量（目标页面）", canonical: clicks, dtype: number }
+      - { raw: "安装", canonical: install, dtype: number }
+    required_columns: [account_id, creative_id, spend]
+    snapshot:
+      is_snapshot: false
+
+  - id: af_ad
+    platform: appsflyer
+    role: attribution
+    grain: ad
+    discover:
+      dir: "inbox/af"
+      glob: "AF_Ad_*.csv"
+      pick:
+        strategy: latest_batch_by_date
+        batch_key: report_date
+    layout:
+      header_row: 0
+      encoding: utf-8
+    date_column:
+      raw: "Date"
+      parse: "%Y-%m-%d"
+    observed_schema:
+      - { raw: "Date", canonical: af_date, dtype: date }
+      - { raw: "Ad ID", canonical: af_ad_id, dtype: text }
+      - { raw: "Unique users activity days cumulative appsflyer first_deposited_v1", canonical: first_deposit, dtype: number }
+    required_columns: [af_ad_id]
+    snapshot:
+      is_snapshot: true
+      snapshot_field: snapshot_date
+
+source_plan:
+  analysis_grain: ad
+  grains_provided: [ad]
+  joins:
+    - id: tt_x_af
+      left: tt_raw
+      right: af_ad
+      type: left
+      keys: [date, account_id, creative_id]
+      enforce_grain: ad
+  additive_policy:
+    forbid_cross_grain_sum: true
+    additive_measures: [spend, impressions, clicks, install, first_deposit]
+  dedupe:
+    - source: af_ad
+      key: [af_date, af_ad_id]
+      keep: latest_snapshot
+  unmatched_policy:
+    keep_left: true
+    report: true
+    label: "未匹配"
+
+metrics:
+  spend:        { role: spend,        from: tt_raw.spend,      agg: sum }
+  impressions:  { role: impressions,  from: tt_raw.impressions, agg: sum }
+  clicks:       { role: clicks,       from: tt_raw.clicks,      agg: sum }
+  install:      { role: install,      from: tt_raw.install,     agg: sum }
+  first_deposit:
+    role: first_deposit
+    candidates:
+      - id: v1_activity
+        source: af_ad
+        field: "Unique users activity days cumulative appsflyer first_deposited_v1"
+        semantics: { entity: unique_user, window: cumulative, basis: activity, variant: v1 }
+        status: confirmed
+    chosen: v1_activity
+    confirm_required: true
+
+derived:
+  cpa_ftd:
+    expr: "spend / first_deposit"
+    null_policy: { on_zero_denominator: blank, on_missing_numerator: blank }
+    display: { decimals: 2, unit: USD }
+
+output:
+  artifacts:
+    - kind: csv
+      role: process_table
+      path: "output/过程表_{report_type}_{date}.csv"
+    - kind: csv
+      role: result_table
+      path: "output/结果表_{report_type}_{date}.csv"
+
+validation:
+  default_on_failure: block
+  checks:
+    - { id: total_reconcile, rule: "报告各指标合计 == 源侧过滤后合计", tolerance: 0.01, level: blocking }
+    - { id: row_count, rule: "结果行数 == 预期分组数", level: blocking }
+  draft_channel:
+    enabled: true
+    requires_explicit_user_request: true
+    location: "_drafts"
+    must_not_mix_with_official: true
+
+origin:
+  type: from_scratch
+  verified: []
+  unverified_items: 0

@@ -1,0 +1,5 @@
+Date,Account ID,Ad ID,Snapshot Date,signup_success,kyc_successed,first_deposited,Revenue USD
+2026-10-24,nova-meta-001,ad-us-1,2026-10-24,8,5,2,220
+2026-10-24,nova-meta-001,ad-us-2,2026-10-24,4,2,1,80
+2026-10-24,nova-meta-001,ad-gb-1,2026-10-24,6,4,1,120
+2026-10-24,nova-meta-001,ad-gb-2,2026-10-24,6,3,2,180
