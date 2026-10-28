@@ -22,6 +22,10 @@ import argparse
 import sys
 from pathlib import Path
 
+from cli_compat import configure_console
+
+configure_console()
+
 from openpyxl import load_workbook
 
 

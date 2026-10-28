@@ -290,6 +290,34 @@ class GenerateReportCliTests(unittest.TestCase):
             self.assertEqual([column["name"] for column in source["columns"]], ["Day", "Account ID", "Ad ID", "Spend"])
             self.assertTrue(source["grain_candidates"])
 
+    def test_probe_recognizes_common_english_registration_headers(self) -> None:
+        test_tmp = ROOT / "runtime" / "test-tmp"
+        test_tmp.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=test_tmp) as tmp:
+            work = Path(tmp)
+            source_path = work / "adjust_events.csv"
+            source_path.write_text(
+                "Date,Ad ID,Registrations,Registrations Activity,Registrations LTV\n"
+                "2026-10-25,ad-1,7,6,70\n",
+                encoding="utf-8",
+            )
+            probe_path = work / "probe.json"
+
+            result = run_cli(
+                SCRIPTS / "probe_sources.py",
+                "--source-file", source_path,
+                "--out", probe_path,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            probe = json.loads(probe_path.read_text(encoding="utf-8"))
+            roles = {
+                column["name"]: column["role_candidates"]
+                for column in probe["sources"][0]["columns"]
+            }
+            for name in ("Registrations", "Registrations Activity", "Registrations LTV"):
+                self.assertEqual(roles[name], ["registration"])
+
     def test_xlsx_source_uses_profile_layout_and_generates_report(self) -> None:
         test_tmp = ROOT / "runtime" / "test-tmp"
         test_tmp.mkdir(parents=True, exist_ok=True)

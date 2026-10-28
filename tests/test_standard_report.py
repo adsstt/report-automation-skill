@@ -103,6 +103,43 @@ def minimal_standard_profile(*, confirmed: bool, pending_p0: bool = False) -> di
 
 
 class StandardReportTests(unittest.TestCase):
+    def test_infer_combines_same_role_metrics_across_multiple_ad_platforms(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "runtime") as tmp:
+            work = Path(tmp)
+            probe = standard_probe(work)
+            google = json.loads(json.dumps(probe["sources"][0]))
+            google["path"] = str(work / "google_ads.csv")
+            google["columns"] = [
+                {**column, "name": "Cost" if column["role_candidates"] == ["spend"] else column["name"]}
+                for column in google["columns"]
+            ]
+            probe["sources"].append(google)
+            probe_path = work / "probe.json"
+            goal_path = work / "business-goal.yaml"
+            profile_path = work / "profile.yaml"
+            probe_path.write_text(json.dumps(probe, ensure_ascii=False), encoding="utf-8")
+            goal_path.write_text(yaml.safe_dump({
+                "primary_goal": "efficiency",
+                "goal_description": "统一查看 Meta 和 Google 的投放效率",
+            }, allow_unicode=True), encoding="utf-8")
+
+            result = run_cli(
+                SCRIPTS / "infer_mappings.py",
+                "--probe", probe_path,
+                "--business-goal", goal_path,
+                "--standard-output",
+                "--out", profile_path,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            profile = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
+            self.assertEqual(profile["metrics"]["spend"]["role"], "spend")
+            self.assertEqual(
+                set(profile["metrics"]["spend"]["components"]),
+                {"meta_ad.spend", "gg_ad.spend"},
+            )
+            self.assertNotIn("spend_gg_ad", profile["metrics"])
+
     def test_infer_standard_output_builds_period_recommendation_and_three_sheets(self) -> None:
         with tempfile.TemporaryDirectory(dir=ROOT / "runtime") as tmp:
             work = Path(tmp)
@@ -133,6 +170,114 @@ class StandardReportTests(unittest.TestCase):
             self.assertEqual(
                 [sheet["target_sheet"] for sheet in workbook["sheets"]],
                 ["管理摘要", "明细数据", "趋势环比"],
+            )
+
+    def test_standard_report_sums_multiple_ad_platforms(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "runtime") as tmp:
+            work = Path(tmp)
+            meta_path = work / "meta_ads.csv"
+            google_path = work / "google_ads.csv"
+            common_fields = ["Date", "Account ID", "Campaign ID", "Ad ID", "Impressions", "Clicks", "Installs"]
+            with meta_path.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=[*common_fields, "Spend"])
+                writer.writeheader()
+                writer.writerows([
+                    {"Date": "2026-10-14", "Account ID": "meta-a", "Campaign ID": "mc", "Ad ID": "ma", "Spend": 100, "Impressions": 10000, "Clicks": 200, "Installs": 20},
+                    {"Date": "2026-10-20", "Account ID": "meta-a", "Campaign ID": "mc", "Ad ID": "ma", "Spend": 150, "Impressions": 15000, "Clicks": 300, "Installs": 30},
+                ])
+            with google_path.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=[*common_fields, "Cost"])
+                writer.writeheader()
+                writer.writerows([
+                    {"Date": "2026-10-14", "Account ID": "google-a", "Campaign ID": "gc", "Ad ID": "ga", "Cost": 50, "Impressions": 5000, "Clicks": 100, "Installs": 10},
+                    {"Date": "2026-10-20", "Account ID": "google-a", "Campaign ID": "gc", "Ad ID": "ga", "Cost": 100, "Impressions": 10000, "Clicks": 200, "Installs": 20},
+                ])
+            probe = standard_probe(work)
+            google_probe = json.loads(json.dumps(probe["sources"][0]))
+            google_probe["path"] = str(google_path)
+            google_probe["columns"] = [
+                {**column, "name": "Cost" if column["role_candidates"] == ["spend"] else column["name"]}
+                for column in google_probe["columns"]
+            ]
+            probe["sources"][0]["path"] = str(meta_path)
+            probe["sources"].append(google_probe)
+            probe_path = work / "probe.json"
+            goal_path = work / "goal.yaml"
+            profile_path = work / "profile.yaml"
+            template_path = work / "standard-report-template.xlsx"
+            output_path = work / "multi-platform.xlsx"
+            probe_path.write_text(json.dumps(probe, ensure_ascii=False), encoding="utf-8")
+            goal_path.write_text(yaml.safe_dump({
+                "primary_goal": "efficiency",
+                "goal_description": "统一查看多个广告平台的投放效率",
+                "period": {"type": "weekly", "confirmed": True},
+                "layout_confirmed": True,
+            }, allow_unicode=True), encoding="utf-8")
+            inferred = run_cli(
+                SCRIPTS / "infer_mappings.py", "--probe", probe_path,
+                "--business-goal", goal_path, "--standard-output", "--out", profile_path,
+            )
+            self.assertEqual(inferred.returncode, 0, inferred.stdout + inferred.stderr)
+            created = run_cli(
+                SCRIPTS / "create_standard_template.py", "--profile", profile_path, "--out", template_path,
+            )
+            self.assertEqual(created.returncode, 0, created.stdout + created.stderr)
+            rendered = run_cli(
+                SCRIPTS / "render_workbook.py", "--profile", profile_path,
+                "--report-type", "standard", "--date", "2026-10-21",
+                "--source-file", f"meta_ad={meta_path}",
+                "--source-file", f"gg_ad={google_path}",
+                "--out", output_path,
+            )
+            self.assertEqual(rendered.returncode, 0, rendered.stdout + rendered.stderr)
+            workbook = load_workbook(output_path, data_only=False)
+            summary = workbook["管理摘要"]
+            headers = {summary.cell(row=7, column=column).value: column for column in range(1, summary.max_column + 1)}
+            spend = headers["花费"]
+            self.assertEqual(summary.cell(row=8, column=spend).value, 150)
+            self.assertEqual(summary.cell(row=9, column=spend).value, 250)
+            workbook.close()
+
+    def test_infer_proposes_a_join_for_each_ad_platform(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "runtime") as tmp:
+            work = Path(tmp)
+            probe = standard_probe(work)
+            google = json.loads(json.dumps(probe["sources"][0]))
+            google["path"] = str(work / "google_ads.csv")
+            google["columns"] = [
+                {**column, "name": "Cost" if column["role_candidates"] == ["spend"] else column["name"]}
+                for column in google["columns"]
+            ]
+            adjust = {
+                "path": str(work / "adjust_events.csv"),
+                "format": "csv", "encoding": "utf-8", "delimiter": ",", "header_row": 0,
+                "columns": [
+                    {"name": "Date", "date_ratio": 1.0, "numeric_ratio": 0.0, "role_candidates": ["date"]},
+                    {"name": "Account ID", "date_ratio": 0.0, "numeric_ratio": 0.0, "role_candidates": ["account_id"]},
+                    {"name": "Ad ID", "date_ratio": 0.0, "numeric_ratio": 0.0, "role_candidates": ["ad_id"]},
+                    {"name": "Registrations", "date_ratio": 0.0, "numeric_ratio": 1.0, "role_candidates": ["registration"]},
+                ],
+                "grain_candidates": [{"grain": "ad", "confidence": "high"}],
+                "date_coverage": {"min": "2026-10-01", "max": "2026-10-21", "distinct_days": 21},
+                "distinct_countries": 2,
+            }
+            probe["sources"].extend([google, adjust])
+            probe_path = work / "probe.json"
+            goal_path = work / "goal.yaml"
+            profile_path = work / "profile.yaml"
+            probe_path.write_text(json.dumps(probe, ensure_ascii=False), encoding="utf-8")
+            goal_path.write_text(yaml.safe_dump({
+                "primary_goal": "acquisition", "goal_description": "提升多平台注册量",
+            }, allow_unicode=True), encoding="utf-8")
+            result = run_cli(
+                SCRIPTS / "infer_mappings.py", "--probe", probe_path,
+                "--business-goal", goal_path, "--standard-output", "--out", profile_path,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            profile = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                {join["left"] for join in profile["source_plan"]["joins"]},
+                {"meta_ad", "gg_ad"},
             )
 
     def test_template_generation_blocks_when_period_is_unconfirmed(self) -> None:

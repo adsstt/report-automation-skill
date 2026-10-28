@@ -225,3 +225,16 @@ python evals/fresh-product/run_acceptance.py
 
 验收产物会写入 `evals/fresh-product/runtime/`，包括 probe、infer 草稿、CSV、影子 diff、
 客户 Excel 和最终 `acceptance_result.md`。
+
+另有三套“打包 → 隔离安装 → DSH 同步 → 交互门禁 → 出报表”的新用户实用性矩阵，覆盖：
+
+- 有模板、熟悉字段：TikTok + AppsFlyer
+- 无模板、完全小白：Meta + Google + Adjust（自动创建标准三 Sheet，并合并两个广告平台）
+- 有模板、不懂归因口径：Google + AppsFlyer（Activity/LTV 候选必须先确认）
+
+```bash
+python evals/usability-matrix/run_matrix.py
+```
+
+结果与工作簿写入 `evals/usability-matrix/runtime/`。该目录不会发布；矩阵脚本和说明会随 npm 包提供，
+方便安装者在自己的环境复验。

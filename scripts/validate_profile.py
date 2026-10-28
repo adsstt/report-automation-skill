@@ -28,6 +28,10 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from cli_compat import configure_console
+
+configure_console()
+
 try:
     import yaml
 except ImportError:  # pragma: no cover
@@ -132,6 +136,10 @@ def semantic_issues(profile: dict[str, Any]) -> list[Issue]:
             src = frm.split(".", 1)[0]
             if src not in source_ids:
                 add("FAIL", "UNKNOWN_SOURCE", f"metrics.{name}.from 引用了不存在的 source：{src}", f"metrics.{name}")
+        for component in m.get("components") or []:
+            src = component.split(".", 1)[0]
+            if src not in source_ids:
+                add("FAIL", "UNKNOWN_SOURCE", f"metrics.{name}.components 引用了不存在的 source：{src}", f"metrics.{name}")
         for cand in m.get("candidates", []) or []:
             if cand.get("source") not in source_ids:
                 add("FAIL", "UNKNOWN_SOURCE", f"metrics.{name} 候选字段引用了不存在的 source：{cand.get('source')}", f"metrics.{name}")
@@ -222,6 +230,11 @@ def semantic_issues(profile: dict[str, Any]) -> list[Issue]:
             known = _canonicals(profile, src)
             if known and canon not in known:
                 add("WARN", "UNKNOWN_CANONICAL", f"metrics.{name}.from 的字段 {canon} 没有出现在 {src}.observed_schema 中", f"metrics.{name}")
+        for component in m.get("components") or []:
+            src, canon = component.split(".", 1)
+            known = _canonicals(profile, src)
+            if known and canon not in known:
+                add("WARN", "UNKNOWN_CANONICAL", f"metrics.{name}.components 的字段 {canon} 没有出现在 {src}.observed_schema 中", f"metrics.{name}")
 
     # ---- 7. derived.expr 引用的标识符必须存在 ----
     for name, d in derived.items():
@@ -386,6 +399,8 @@ def semantic_issues(profile: dict[str, Any]) -> list[Issue]:
     for m in metrics.values():
         if m.get("from"):
             used.add(m["from"].split(".", 1)[0])
+        for component in m.get("components") or []:
+            used.add(component.split(".", 1)[0])
         for c in m.get("candidates") or []:
             used.add(c.get("source"))
     for j in plan.get("joins") or []:

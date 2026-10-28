@@ -55,13 +55,25 @@ report_types:
 
 新增报表形态 = 组合已有轴值，不改引擎。
 
-## metrics：三种写法
+## metrics：四种写法
 
 **直接映射**
 
 ```yaml
 spend: { role: spend, from: tt_ad.spend, agg: sum }
 ```
+
+**多广告平台同口径相加**
+
+```yaml
+spend:
+  role: spend
+  components: [meta_ad.spend, google_ad.spend]
+  agg: sum
+```
+
+`components` 只用于语义一致、允许相加的同口径指标。每个广告平台仍须分别与归因源配置
+并确认 join；不能用它跨粒度相加 campaign、ad group 与 ad 数据。
 
 **多候选（同一事件多个字段，必须人确认）**
 

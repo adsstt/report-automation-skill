@@ -23,6 +23,10 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+from cli_compat import configure_console
+
+configure_console()
+
 
 def load_table(path: Path, sheet: str | None = None) -> tuple[list[str], list[dict[str, Any]]]:
     """读入为 (header, rows)。CSV 自动尝试 UTF-8/GBK；XLSX 取指定或首个 sheet。"""

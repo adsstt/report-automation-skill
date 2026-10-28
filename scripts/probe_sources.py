@@ -31,6 +31,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from cli_compat import configure_console
+
+configure_console()
+
 DATE_FORMATS = ("%Y-%m-%d", "%Y/%m/%d", "%Y%m%d", "%m/%d/%Y", "%d/%m/%Y", "%Y-%m-%d %H:%M:%S")
 ENCODINGS = ("utf-8-sig", "utf-8", "gb18030", "cp936", "latin-1")
 
@@ -50,7 +54,7 @@ COLUMN_HINTS: dict[str, list[str]] = {
     "impressions": [r"^展示量$", r"^曝光", r"^impressions$"],
     "clicks": [r"点击量", r"^clicks?$"],
     "install": [r"安装", r"^installs?"],
-    "registration": [r"signup_success", r"注册"],
+    "registration": [r"signup_success", r"^signups?\b", r"^registrations?\b", r"注册"],
     "kyc": [r"kyc_successed"],
     "first_deposit": [r"first_deposited"],
     "trade": [r"first_traded", r"trade_all"],

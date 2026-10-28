@@ -25,6 +25,8 @@
     "evals/fresh-product/samples",
     "evals/fresh-product/sources",
     "evals/fresh-product/standard-sources",
+    "evals/usability-matrix/README.md",
+    "evals/usability-matrix/run_matrix.py",
     "examples",
     "references",
     "scripts/*.py",

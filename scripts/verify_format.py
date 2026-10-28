@@ -21,6 +21,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from cli_compat import configure_console
+
+configure_console()
+
 try:
     import yaml
 except ImportError:  # pragma: no cover

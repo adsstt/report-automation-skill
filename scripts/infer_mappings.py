@@ -23,6 +23,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from cli_compat import configure_console
+
+configure_console()
+
 try:
     import yaml
 except ImportError:  # pragma: no cover
@@ -62,7 +66,7 @@ HEADER_TO_ROLE: list[tuple[str, str]] = [
     (r"trade|ftt", "trade"),
     (r"income|revenue|收入", "revenue"),
     (r"^kyc|basic kyc|advanced kyc", "kyc"),
-    (r"signup|register|注册(?!成本)", "registration"),
+    (r"signup|register|registration|注册(?!成本)", "registration"),
     (r"install|激活|安装(?!成本)", "install"),
     (r"impression|展示|曝光", "impressions"),
     (r"click|点击(?!率)", "clicks"),
@@ -446,8 +450,21 @@ def main() -> int:
             if not cols:
                 continue
             if len(cols) == 1:
-                key = role if role not in metrics else f"{role}_{sid}"
-                metrics[key] = {"role": role, "from": f"{sid}.{role}", "agg": "sum"}
+                combine_ad_metric = (
+                    meta["role"] == "ad_platform"
+                    and role in {"spend", "impressions", "clicks", "install"}
+                    and role in metrics
+                    and (metrics[role].get("from") or metrics[role].get("components"))
+                )
+                if combine_ad_metric:
+                    key = role
+                    existing = metrics[role]
+                    components = list(existing.get("components") or [existing["from"]])
+                    components.append(f"{sid}.{role}")
+                    metrics[role] = {"role": role, "components": components, "agg": "sum"}
+                else:
+                    key = role if role not in metrics else f"{role}_{sid}"
+                    metrics[key] = {"role": role, "from": f"{sid}.{role}", "agg": "sum"}
                 distinct_dates = int((info.get("date_coverage") or {}).get("distinct_days") or 0)
                 distinct_countries = int(info.get("distinct_countries") or 0)
                 enough_evidence = distinct_dates >= 2 and distinct_countries >= 2
@@ -467,8 +484,11 @@ def main() -> int:
                     }
                 )
                 if not enough_evidence:
+                    ambiguity_id = f"p0_{key}_evidence"
+                    if any(item.get("id") == ambiguity_id for item in ambiguities):
+                        ambiguity_id = f"p0_{key}_{sid}_evidence"
                     ambiguities.append({
-                        "id": f"p0_{key}_evidence",
+                        "id": ambiguity_id,
                         "question": f"{role} 的样本证据不足，是否确认使用字段 {cols[0]}？",
                         "evidence": f"不同日期 {distinct_dates} 个、不同国家 {distinct_countries} 个；冻结门槛均为至少 2 个",
                         "suggested": "补充样本，或由用户显式确认该映射",
@@ -519,10 +539,12 @@ def main() -> int:
 
     # ---------- 关联 ----------
     joins = []
-    left = next((s for s in profile_sources if s["role"] == "ad_platform"), None)
+    left_sources = [s for s in profile_sources if s["role"] == "ad_platform"]
     right = next((s for s in profile_sources if s["role"] == "attribution" and s["grain"] == analysis_grain), None)
     role_cols_by_sid = {item["id"]: item["role_columns"] for item in prepared}
-    if left and right:
+    for left_index, left in enumerate(left_sources):
+        if not right:
+            break
         # 投放侧若同时暴露 creative_id 与 ad_id，默认用 creative_id 关联（平台配对属性，仍需确认）
         left_ids = role_cols_by_sid.get(left["id"], {})
         if "creative_id" in left_ids:
@@ -543,14 +565,14 @@ def main() -> int:
         )
         ambiguities.append(
             {
-                "id": "p0_join_keys",
+                "id": "p0_join_keys" if left_index == 0 else f"p0_join_keys_{left['id']}",
                 "question": (
                     f"{left['platform']} × {right['platform']} 在 {analysis_grain} 粒度的关联键是什么？"
                     f"（草稿默认用 {join_key}，但投放侧可能同时有 ad_id 与 creative_id）"
                 ),
                 "evidence": "关联键是平台配对的属性，不能沿用其他平台的结论；TikTok×AppsFlyer 实测为 创意素材 ID ↔ Ad ID，其他组合需重新确认",
                 "suggested": f"先按 date + account_id + {join_key} 试，再用影子对账验证覆盖率",
-                "affected": ["source_plan.joins"],
+                "affected": [f"source_plan.joins[{left['id']}_x_{right['id']}]"],
                 "level": "P0",
                 "status": "pending",
             }

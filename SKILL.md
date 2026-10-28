@@ -152,6 +152,7 @@ python scripts/verify_workbook.py --template <模板.xlsx> --output <产物.xlsx
 | "FTD 用带 _v1 的那个" | `metrics.<名>.candidates[].status` + `chosen` |
 | "从 10-25 开始口径变了" | `metrics.<名>.effective`（`from` / `before` 分段，必须有兜底段） |
 | "花费按消耗求和" | `metrics.<名>.from` + `agg: sum` |
+| "Meta 和 Google 花费合并" | `metrics.<名>.components`；每个平台仍分别配置并确认归因 join |
 | "按账户×国家×事件汇总" | `report_types[].aggregation.group_by` |
 | "11 点时报跟前一天 11 点比" | `comparison.mode: same_point_prev_day` |
 | "周报是上周 vs 本周" | `time_scope.multi_period` + `comparison.previous_period` |
@@ -207,6 +208,7 @@ python scripts/verify_workbook.py --template <模板.xlsx> --output <产物.xlsx
 `scripts/country_resolver.py` | 三层国家码解析 |
 `examples/minimal/profile.yaml` | 最小及格线 |
 `evals/fresh-product/run_acceptance.py` | 全新 NovaFit 产品的 Probe→Infer→生成→验证端到端验收 |
+`evals/usability-matrix/run_matrix.py` | 三类新用户从 npm 隔离安装到最终工作簿的实用性矩阵 |
 
 ## 交付说明必须包含
 

@@ -362,6 +362,12 @@
       "properties": {
         "role": { "$ref": "#/$defs/metric_role" },
         "from": { "type": "string", "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$" },
+        "components": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$" }
+        },
         "agg": { "enum": ["sum", "count", "count_distinct", "max", "avg", "min"] },
         "confirm_required": { "type": "boolean" },
         "display_only": { "type": "boolean" },
@@ -369,6 +375,7 @@
       },
       "oneOf": [
         { "required": ["from", "agg"] },
+        { "required": ["components", "agg"] },
         { "required": ["effective"] }
       ]
     },

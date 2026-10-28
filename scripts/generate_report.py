@@ -28,6 +28,10 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+from cli_compat import configure_console
+
+configure_console()
+
 try:
     import yaml
 except ImportError:  # pragma: no cover
@@ -226,26 +230,43 @@ def resolve_effective(metric: dict[str, Any], report_date: str) -> dict[str, Any
     return min(fallbacks, key=lambda seg: seg["before"]) if fallbacks else None
 
 
-def metric_source(metric: dict[str, Any], report_date: str = "") -> str | None:
-    """Return the source id selected by a metric for this reporting date."""
+def metric_sources(metric: dict[str, Any], report_date: str = "") -> list[str]:
+    """Return every source id contributing to a metric for this reporting date."""
+    if metric.get("components"):
+        return [component.split(".", 1)[0] for component in metric["components"]]
     seg = resolve_effective(metric, report_date)
     if seg and seg.get("field"):
-        return seg["field"].split(".", 1)[0]
+        return [seg["field"].split(".", 1)[0]]
     if metric.get("from"):
-        return metric["from"].split(".", 1)[0]
+        return [metric["from"].split(".", 1)[0]]
     chosen = (seg or {}).get("candidate_ref") or metric.get("chosen") or metric.get("candidate_ref")
     for cand in metric.get("candidates") or []:
         if cand.get("id") == chosen:
-            return cand.get("source")
-    return None
+            return [cand.get("source")]
+    return []
+
+
+def metric_source(metric: dict[str, Any], report_date: str = "") -> str | None:
+    """Backward-compatible single-source accessor."""
+    sources = metric_sources(metric, report_date)
+    return sources[0] if sources else None
 
 
 def metric_value(row: dict[str, Any], metric_name: str, metric: dict[str, Any],
                  source_ids: dict[str, dict[str, Any]], report_date: str = "") -> Decimal:
     """按 metric 定义从一行取数，支持「直接映射 / 候选 / 口径分段」三种形式。"""
-    expected_source = metric_source(metric, report_date)
-    if expected_source and row.get("_source_id") != expected_source:
+    expected_sources = metric_sources(metric, report_date)
+    if expected_sources and row.get("_source_id") not in expected_sources:
         return Decimal(0)
+    if metric.get("components"):
+        source_id = row.get("_source_id")
+        component = next(
+            (item for item in metric["components"] if item.split(".", 1)[0] == source_id),
+            None,
+        )
+        if component is None:
+            return Decimal(0)
+        return dec(row.get(component.split(".", 1)[1]))
     seg = resolve_effective(metric, report_date)
     if seg:
         if seg.get("field"):
@@ -372,9 +393,7 @@ def required_source_ids(profile: dict[str, Any], report_date: str) -> set[str]:
     for join in (profile.get("source_plan") or {}).get("joins") or []:
         required.update([join["left"], join["right"]])
     for metric in profile.get("metrics", {}).values():
-        source_id = metric_source(metric, report_date)
-        if source_id:
-            required.add(source_id)
+        required.update(metric_sources(metric, report_date))
     return required
 
 
@@ -486,7 +505,7 @@ def snapshot_maturity_failures(profile: dict[str, Any], data: dict[str, list[dic
         sid = source["id"]
         for metric_name, required_days in maturity.items():
             metric = (profile.get("metrics") or {}).get(metric_name)
-            if not metric or metric_source(metric, report_date) != sid:
+            if not metric or sid not in metric_sources(metric, report_date):
                 continue
             immature_dates: set[str] = set()
             for row in data.get(sid, []):
@@ -532,7 +551,7 @@ def join_metrics(profile: dict[str, Any], data: dict[str, list[dict[str, Any]]],
                 matched[id(left_row)] = True
             for right_row in hits:
                 for name, cfg in metrics.items():
-                    if metric_source(cfg, report_date) == right_id:
+                    if right_id in metric_sources(cfg, report_date):
                         mapped[id(left_row)][name] += metric_value(
                             right_row, name, cfg, sources, report_date
                         )
@@ -601,31 +620,35 @@ def main() -> int:
     if not ad_sources:
         print("配方单里没有投放侧数据源", file=sys.stderr)
         return 2
-    ad_id = ad_sources[0]["id"]
-    ad_rows = [r for r in data.get(ad_id, []) if str(r.get("date") or "")[:10] in selected_dates]
-    if not ad_rows:
-        print(f"投放侧源里没有 {args.date} 的数据行", file=sys.stderr)
+    ad_batches: list[tuple[str, list[dict[str, Any]], dict[int, dict[str, Decimal]], dict[int, bool]]] = []
+    for ad_source in ad_sources:
+        ad_id = ad_source["id"]
+        ad_rows = [r for r in data.get(ad_id, []) if str(r.get("date") or "")[:10] in selected_dates]
+        if not ad_rows:
+            continue
+        mapped, matched = join_metrics(profile, data, ad_id, args.date)
+        joins_for_source = [
+            join for join in (profile.get("source_plan") or {}).get("joins") or []
+            if join.get("left") == ad_id
+        ]
+        if joins_for_source:
+            matched_rows = sum(1 for row in ad_rows if matched.get(id(row), False))
+            coverage = matched_rows / len(ad_rows)
+            threshold = Decimal(str((rules.get("join_coverage_threshold", 0.9))))
+            if Decimal(str(coverage)) < threshold:
+                print(
+                    f"数据源 {ad_id} 关联覆盖率 {coverage:.2%} 低于门槛 {float(threshold):.2%}"
+                    f"（匹配 {matched_rows}/{len(ad_rows)} 行）",
+                    file=sys.stderr,
+                )
+                return 1
+            keep_left = ((profile.get("source_plan") or {}).get("unmatched_policy") or {}).get("keep_left", True)
+            if not keep_left or any(join.get("type") == "inner" for join in joins_for_source):
+                ad_rows = [row for row in ad_rows if matched.get(id(row), False)]
+        ad_batches.append((ad_id, ad_rows, mapped, matched))
+    if not ad_batches:
+        print(f"所有投放侧源里都没有 {args.date} 所属周期的数据行", file=sys.stderr)
         return 2
-
-    mapped, matched = join_metrics(profile, data, ad_id, args.date)
-    joins_for_source = [
-        join for join in (profile.get("source_plan") or {}).get("joins") or []
-        if join.get("left") == ad_id
-    ]
-    if joins_for_source:
-        matched_rows = sum(1 for row in ad_rows if matched.get(id(row), False))
-        coverage = matched_rows / len(ad_rows)
-        threshold = Decimal(str((rules.get("join_coverage_threshold", 0.9))))
-        if Decimal(str(coverage)) < threshold:
-            print(
-                f"关联覆盖率 {coverage:.2%} 低于门槛 {float(threshold):.2%}"
-                f"（匹配 {matched_rows}/{len(ad_rows)} 行）",
-                file=sys.stderr,
-            )
-            return 1
-        keep_left = ((profile.get("source_plan") or {}).get("unmatched_policy") or {}).get("keep_left", True)
-        if not keep_left or any(join.get("type") == "inner" for join in joins_for_source):
-            ad_rows = [row for row in ad_rows if matched.get(id(row), False)]
 
     metrics_cfg = profile["metrics"]
     display_only = {n for n, c in metrics_cfg.items() if c.get("display_only")}
@@ -645,28 +668,31 @@ def main() -> int:
 
     # ---- 过程表：按投放侧粒度聚合 ----
     buckets: dict[str, dict[str, Any]] = {}
-    ad_metric_names = {
-        name for name, cfg in metrics_cfg.items()
-        if metric_source(cfg, args.date) == ad_id
-    }
-    for row in ad_rows:
-        key_field = {"adgroup": "adgroup_id", "ad": "ad_id", "campaign": "campaign_id", "creative": "creative_id", "account": "account_id"}[group_grain]
-        entity_key = str(row.get(key_field) or "")
-        period = report_period_label(report_type, args.date, str(row.get("date") or args.date))
-        key = f"{period}:{entity_key}" if segmented_periods else entity_key
-        bucket = buckets.setdefault(key, {
-            "sample": row,
-            "metrics": defaultdict(Decimal),
-            "matched": False,
-            "period": period,
-        })
-        for name in ad_metric_names:
-            bucket["metrics"][name] += metric_value(
-                row, name, metrics_cfg[name], sources_by_id, args.date
-            )
-        for name, value in mapped.get(id(row), {}).items():
-            bucket["metrics"][name] += value
-        bucket["matched"] = bucket["matched"] or matched.get(id(row), False)
+    for ad_id, ad_rows, mapped, matched in ad_batches:
+        ad_metric_names = {
+            name for name, cfg in metrics_cfg.items()
+            if ad_id in metric_sources(cfg, args.date)
+        }
+        for row in ad_rows:
+            key_field = {"adgroup": "adgroup_id", "ad": "ad_id", "campaign": "campaign_id", "creative": "creative_id", "account": "account_id"}[group_grain]
+            entity_key = str(row.get(key_field) or "")
+            period = report_period_label(report_type, args.date, str(row.get("date") or args.date))
+            local_key = f"{period}:{entity_key}" if segmented_periods else entity_key
+            key = f"{ad_id}:{local_key}"
+            bucket = buckets.setdefault(key, {
+                "sample": row,
+                "source_id": ad_id,
+                "metrics": defaultdict(Decimal),
+                "matched": False,
+                "period": period,
+            })
+            for name in ad_metric_names:
+                bucket["metrics"][name] += metric_value(
+                    row, name, metrics_cfg[name], sources_by_id, args.date
+                )
+            for name, value in mapped.get(id(row), {}).items():
+                bucket["metrics"][name] += value
+            bucket["matched"] = bucket["matched"] or matched.get(id(row), False)
 
     # 投放侧四个基础指标在过程表里用固定中文列名；其余指标（含 display_only）
     # 都要出现在输出里——display_only 只表示「不参与成本公式」，不是「不展示」。
@@ -676,6 +702,7 @@ def main() -> int:
     process_rows = []
     for key, bucket in buckets.items():
         sample = bucket["sample"]
+        source_id = bucket["source_id"]
         campaign = str(sample.get("campaign_name") or "")
         adgroup_name = str(sample.get("adgroup_name") or "")
         event, basis = classify_event(campaign, adgroup_name, rules)
@@ -687,7 +714,7 @@ def main() -> int:
             "记录键": f"{args.report_type}:{args.date}:-:{key}:{event}",
             "日期": f"{args.date} 00:00:00",
             **({"周期": bucket["period"]} if segmented_periods else {}),
-            "平台": (rules.get("platform_label") or sources_by_id[ad_id].get("platform", "")),
+            "平台": (rules.get("platform_label") or sources_by_id[source_id].get("platform", "")),
             "端口": derive_port(sample, rules),
             "账户名称": str(sample.get("account_name") or ""),
             "账户ID": str(sample.get("account_id") or ""),
