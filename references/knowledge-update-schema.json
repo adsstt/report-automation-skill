@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://llm-wiki-lab/report-automation/knowledge-update-schema.json",
+  "title": "Product Knowledge Update",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["knowledge_update_version", "id", "product", "source", "changes"],
+  "properties": {
+    "knowledge_update_version": { "const": 1 },
+    "id": { "type": "string", "minLength": 1 },
+    "product": { "type": "string", "minLength": 1 },
+    "aliases": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "ref"],
+      "properties": {
+        "type": { "enum": ["screenshot", "spreadsheet", "natural_language", "document", "mixed"] },
+        "ref": { "type": "string", "minLength": 1 },
+        "summary": { "type": "string" },
+        "extracted_at": { "type": "string" },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "ref"],
+            "properties": {
+              "kind": { "enum": ["screenshot", "spreadsheet", "document", "chat"] },
+              "ref": { "type": "string", "minLength": 1 },
+              "sha256": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "changes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "level", "status", "evidence"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "operation": { "enum": ["set", "delete"] },
+          "value": {},
+          "level": { "enum": ["P0", "P1", "P2"] },
+          "status": { "enum": ["pending", "confirmed"] },
+          "evidence": { "type": "string", "minLength": 1 },
+          "confirmation": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["confirmed_at", "user_quote"],
+            "properties": {
+              "confirmed_at": { "type": "string", "minLength": 1 },
+              "user_quote": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

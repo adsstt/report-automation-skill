@@ -138,6 +138,37 @@ python scripts/promote_example.py --example examples/minimal/profile.yaml \
   --out <项目>/.report-automation/<产品>/profile.yaml
 ```
 
+## 让它记住产品规则
+
+首次定稿后，把 profile 注册到当前工作区。以后新会话可以用产品名或别名找到它，用户不必
+反复说明同一套字段映射：
+
+```bash
+python scripts/register_product_profile.py --workspace . \
+  --profile runtime/profile.confirmed.yaml --alias "产品简称"
+python scripts/resolve_product_profile.py --workspace . --product "产品简称" --json
+```
+
+用户可用截图、表格、文档或自然语言补充字段关系和产品规则。宿主 AI 会先把内容整理为
+`knowledge-update.yaml`，保留附件引用和证据，然后预览变更。数字口径等 P0 规则必须得到用户
+明确确认才能写入；写入会自动备份旧 profile 并保留审计历史。
+
+```bash
+# 预览，不修改文件
+python scripts/update_product_knowledge.py --workspace . \
+  --profile .report-automation/products/<产品>/profile.yaml \
+  --update runtime/knowledge-update.yaml
+
+# 确认后写入
+python scripts/update_product_knowledge.py --workspace . \
+  --profile .report-automation/products/<产品>/profile.yaml \
+  --update runtime/knowledge-update.yaml --apply
+```
+
+知识保存在项目的 `.report-automation/`，不在 npm 安装目录内，因此升级或重装 skill 不会清空。
+公共平台字典和客户产品知识彼此隔离。CLI 不自带 OCR；截图由正在使用该 skill 的多模态 AI
+读取，截图内容先作为证据/候选，不能绕过 P0 确认门禁。
+
 ## 以后每次出报表
 
 ```bash
@@ -173,6 +204,9 @@ python scripts/verify_workbook.py --template <模板.xlsx> --output <产物.xlsx
 `probe_sources.py` | 看源文件与目标格式长什么样 | 第一次接入 |
 `infer_mappings.py` | 反推候选映射（不落定） | 第一次接入 |
 `create_standard_template.py` | 无目标模板时创建标准三 Sheet 模板 | 第一次接入 / 版式调整 |
+`register_product_profile.py` | 将定稿配置注册到工作区产品库 | 第一次 Freeze 后 |
+`resolve_product_profile.py` | 按产品名/别名复用已确认配置 | 每个新会话开始 |
+`update_product_knowledge.py` | 安全写入截图、表格或对话中确认的新知识 | 用户补充规则时 |
 `validate_profile.py` | 配方单结构与红线校验 | 每次改 profile 后 |
 `verify_format.py` | 列能不能对上目标表头 | 客户改版后 / 接入时 |
 `generate_report.py` | 出过程表/结果表 CSV | 每次 |
@@ -197,6 +231,7 @@ report-automation/
 │   ├── platforms/             # 各广告/归因平台字段字典（按需扩充）
 │   ├── lookups/               # 三层国家码表（ISO / 业务聚合 / profile 覆盖）
 │   ├── report-profile-schema.json  # 配方单机器可校验格式
+│   ├── knowledge-update-schema.json # 产品知识更新机器契约
 │   ├── report-profile-schema.md    # 配方单人读说明
 │   └── ambiguity-protocol.md       # 疑点分级与提问模板
 ├── examples/
@@ -209,7 +244,8 @@ report-automation/
 ## 兼容性与边界
 
 - 支持平台：TikTok / Meta / Google × AppsFlyer / Adjust（引擎不含任何平台分支，差异全在配置与字段字典）
-- 不做：截图 OCR 数据源（接口预留，调用即报错）、飞书多维表同步、图形界面
+- CLI 不内置 OCR；宿主多模态 AI 可读取截图并转为待确认的结构化知识更新
+- 不做：飞书多维表同步、图形界面
 - 客户工作簿只写副本，永不修改模板原件
 
 ## 回归测试
@@ -232,7 +268,7 @@ python evals/fresh-product/run_acceptance.py
 
 另有三套“打包 → 隔离安装 → DSH 同步 → 交互门禁 → 出报表”的新用户实用性矩阵，覆盖：
 
-- 有模板、熟悉字段：TikTok + AppsFlyer
+- 有模板、熟悉字段：TikTok + AppsFlyer，并验证注册产品、补充知识、下一会话按别名复用
 - 无模板、完全小白：Meta + Google + Adjust（标准三 Sheet 同时展示合计、平台分项和注册→KYC→首充漏斗）
 - 有模板、不懂归因口径：Google + AppsFlyer（Activity/LTV 候选必须先确认）
 

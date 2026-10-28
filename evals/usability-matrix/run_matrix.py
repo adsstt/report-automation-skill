@@ -156,6 +156,9 @@ def install_fresh() -> Path:
     required = [
         installed / "SKILL.md", installed / "scripts" / "infer_mappings.py",
         installed / "scripts" / "create_standard_template.py",
+        installed / "scripts" / "register_product_profile.py",
+        installed / "scripts" / "update_product_knowledge.py",
+        installed / "scripts" / "resolve_product_profile.py",
     ]
     if not all(path.exists() for path in required):
         raise RuntimeError(f"fresh install missing files: {[str(path) for path in required if not path.exists()]}")
@@ -216,10 +219,57 @@ def scenario_atlaspay(installed: Path) -> dict:
     })
     profile_path = work / "profile.confirmed.yaml"
     profile_path.write_text(yaml.safe_dump(profile, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    run("AtlasPay validate", [sys.executable, installed / "scripts" / "validate_profile.py", profile_path], cwd=work)
+    run("AtlasPay register product", [
+        sys.executable, installed / "scripts" / "register_product_profile.py",
+        "--workspace", work, "--profile", profile_path, "--alias", "星图支付",
+    ], cwd=work)
+    managed_profile = work / ".report-automation" / "products" / "atlaspay" / "profile.yaml"
+    update_path = work / "knowledge-update.yaml"
+    update_path.write_text(yaml.safe_dump({
+        "knowledge_update_version": 1,
+        "id": "atlaspay-registration-and-window-20261028",
+        "product": "AtlasPay",
+        "source": {
+            "type": "mixed",
+            "ref": "chat:atlaspay-onboarding",
+            "summary": "用户通过字段表和自然语言补充注册口径与归因窗",
+            "artifacts": [{"kind": "spreadsheet", "ref": str(af)}],
+        },
+        "changes": [{
+            "path": "metrics.registration.from",
+            "value": "af_ad.registration",
+            "level": "P0",
+            "status": "confirmed",
+            "evidence": "用户确认 Registrations 是产品注册数",
+            "confirmation": {
+                "confirmed_at": "2026-10-28T12:00:00+08:00",
+                "user_quote": "注册就用 AppsFlyer 的 Registrations",
+            },
+        }, {
+            "path": "knowledge.facts.attribution_window",
+            "value": "7-day click / 1-day view",
+            "level": "P1",
+            "status": "confirmed",
+            "evidence": "用户提供归因设置说明",
+        }],
+    }, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    run("AtlasPay learn product knowledge", [
+        sys.executable, installed / "scripts" / "update_product_knowledge.py",
+        "--workspace", work, "--profile", managed_profile, "--update", update_path, "--apply",
+    ], cwd=work)
+    resolved = run("AtlasPay resolve next session", [
+        sys.executable, installed / "scripts" / "resolve_product_profile.py",
+        "--workspace", work, "--product", "星图支付", "--json",
+    ], cwd=work)
+    resolution = json.loads(resolved.stdout)
+    resolved_profile = Path(resolution["profile"])
+    learned = yaml.safe_load(resolved_profile.read_text(encoding="utf-8"))
+    if learned.get("knowledge", {}).get("facts", {}).get("attribution_window") != "7-day click / 1-day view":
+        raise RuntimeError("AtlasPay product knowledge was not retained")
+    run("AtlasPay validate", [sys.executable, installed / "scripts" / "validate_profile.py", resolved_profile], cwd=work)
     output = work / "AtlasPay_daily.xlsx"
     run("AtlasPay render", [
-        sys.executable, installed / "scripts" / "render_workbook.py", "--profile", profile_path,
+        sys.executable, installed / "scripts" / "render_workbook.py", "--profile", resolved_profile,
         "--report-type", "daily", "--date", "2026-10-27",
         "--source-file", f"tt_ad={ads}", "--source-file", f"af_ad={af}", "--out", output,
     ], cwd=work)
@@ -228,7 +278,10 @@ def scenario_atlaspay(installed: Path) -> dict:
     book.close()
     if values != [100, 20, 12, 5]:
         raise RuntimeError(f"AtlasPay totals mismatch: {values}")
-    return {"result": "PASS", "questions": len(draft_profile.get("ambiguities", [])), "totals": values}
+    return {
+        "result": "PASS", "questions": len(draft_profile.get("ambiguities", [])),
+        "totals": values, "knowledge_persisted": True, "resolved_by": resolution["matched_by"],
+    }
 
 
 def scenario_bloomcart(installed: Path) -> dict:

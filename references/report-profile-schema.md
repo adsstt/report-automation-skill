@@ -14,6 +14,24 @@
 `metrics` | 指标 | 语义角色 → 源字段（支持候选与口径分段） |
 `output` | 目标格式 | 写哪个工作簿/CSV、每个 sheet 的列定义 |
 
+## knowledge：产品专属事实（可选）
+
+`knowledge` 只保存某个产品已确认、且生成报表需要复用的事实；公共平台定义仍放在
+`references/platforms/`。不要在这里存整张截图、原始客户数据或未确认的 P0 猜测。
+
+```yaml
+knowledge:
+  facts:
+    attribution_window: 7-day click / 1-day view
+    owner: growth-team
+  notes:
+    - 注册指标由 AppsFlyer 提供
+```
+
+从截图、表格、文档或自然语言提取的新信息，先按 `knowledge-update-schema.json` 生成更新文件，
+由 `update_product_knowledge.py` 预览并应用。字段映射、join、归因归属等 P0 必须包含用户明确
+确认记录；应用时会备份旧 profile，并在产品目录中保存来源与变更历史。
+
 ## report_intent：无目标模板时的报告意图
 
 `report_intent` 是可选块；已有目标模板的 profile 不需要迁移。无模板模式用它记录业务目标、

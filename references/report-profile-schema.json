@@ -27,6 +27,7 @@
       "description": "声明式业务规则：事件分类、国家映射、端口派生、归因匹配偏好、展示过滤等。具体子结构在 P1 阶段先宽松允许，P2 收紧。",
       "additionalProperties": true
     },
+    "knowledge": { "$ref": "#/$defs/product_knowledge" },
     "metrics": {
       "type": "object",
       "minProperties": 1,
@@ -57,6 +58,22 @@
   },
 
   "$defs": {
+    "product_knowledge": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "facts": {
+          "type": "object",
+          "description": "当前产品专属、不能推广到公共平台字典的已确认事实",
+          "additionalProperties": true
+        },
+        "notes": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+
     "product": {
       "type": "object",
       "additionalProperties": false,

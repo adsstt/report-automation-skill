@@ -1,6 +1,6 @@
 {
   "name": "report-automation-skill",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Reusable report automation skill with target-template and AI-generated standard-report flows",
   "type": "module",
   "main": "./index.js",

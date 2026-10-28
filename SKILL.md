@@ -54,6 +54,50 @@ python scripts/create_standard_template.py --profile runtime/profile.confirmed.y
   --out runtime/standard-report-template.xlsx
 ```
 
+## 产品知识持久化（新会话先查、确认后再写）
+
+产品专属字段映射、归因窗、排除账户、业务命名等知识必须保存在**用户工作区**的
+`.report-automation/`，不能写进技能安装目录，也不能混入公共 `references/platforms/`。
+技能升级或重新安装不会覆盖工作区知识。
+
+每次开始任务先尝试解析已有产品；解析成功就复用，不重复询问已确认规则：
+
+```bash
+python scripts/resolve_product_profile.py --workspace . --product "<产品名或别名>" --json
+```
+
+首次完成 Freeze 后，把定稿 profile 注册进产品库：
+
+```bash
+python scripts/register_product_profile.py --workspace . \
+  --profile runtime/profile.confirmed.yaml --alias "<用户常用简称>"
+```
+
+用户后续可能通过截图、表格、文档或自然语言补充信息。宿主 AI 负责阅读这些内容，提取成
+符合 `references/knowledge-update-schema.json` 的更新 YAML，并保留原始附件引用作为证据；
+CLI 本身不做 OCR。截图或字段名相似只能形成候选，不能自动成为已确认数字口径。
+
+1. 把变化分成 P0/P1/P2，并向用户展示“当前值 → 建议值、证据、影响范围”。
+2. P0（字段映射、join、归因归属、日期/时区、排除账户等）必须记录用户明确确认原话；未确认时保持 `status: pending`，写入会被阻断。
+3. 先预览，再落盘；落盘后重新校验，必要时跑影子对账。
+
+```bash
+# 只预览，零写入
+python scripts/update_product_knowledge.py --workspace . \
+  --profile .report-automation/products/<产品>/profile.yaml \
+  --update runtime/knowledge-update.yaml
+
+# 用户确认后实际写入（自动备份 profile、记录证据和变更历史）
+python scripts/update_product_knowledge.py --workspace . \
+  --profile .report-automation/products/<产品>/profile.yaml \
+  --update runtime/knowledge-update.yaml --apply
+
+python scripts/validate_profile.py .report-automation/products/<产品>/profile.yaml
+```
+
+不要把原始截图全文或客户数据复制进公共知识库；只保存生成报表所需的结构化事实、来源引用、
+确认记录与必要摘要。新产品必须单独注册，禁止把 A 产品的 profile 当成 B 产品知识库。
+
 ## 首次接入五步
 
 每步都用脚本，不要凭感觉跳步。
@@ -188,6 +232,7 @@ python scripts/verify_workbook.py --template <模板.xlsx> --output <产物.xlsx
 |---|---|
 `references/report-profile-schema.json` | 配方单机器可校验格式（改配置前先看它） |
 `references/report-profile-schema.md` | 配方单人读说明 |
+`references/knowledge-update-schema.json` | 截图、表格、自然语言提取结果的知识更新契约 |
 `references/ambiguity-protocol.md` | 疑点分级与提问模板 |
 `references/platforms/*.md` | 各平台字段字典与同事件候选组 |
 `references/platforms/catalog.yaml` | 平台识别模式、角色与 source 前缀（引擎不写平台分支） |
@@ -196,6 +241,9 @@ python scripts/verify_workbook.py --template <模板.xlsx> --output <产物.xlsx
 `scripts/probe_sources.py` | 探源与目标格式 |
 `scripts/infer_mappings.py` | 反推候选（只产候选） |
 `scripts/create_standard_template.py` | 无目标模板时创建标准三 Sheet 模板或 DRAFT |
+`scripts/register_product_profile.py` | 把首次定稿 profile 注册到工作区产品库 |
+`scripts/resolve_product_profile.py` | 新会话按产品名或别名寻找已保存 profile |
+`scripts/update_product_knowledge.py` | 预览/写入已确认产品知识，自动备份与留痕 |
 `scripts/validate_profile.py` | 结构 + 语义 + P0 门禁 |
 `scripts/verify_format.py` | 列能否对上目标表头（可反向起草列定义） |
 `scripts/verify_profile_fit.py` | 示例复用适配度打分 |

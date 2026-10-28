@@ -1,0 +1,27 @@
+knowledge_update_version: 1
+id: novafit-field-mapping-20261028
+product: NovaFit
+aliases: [Nova Fit]
+source:
+  type: mixed
+  ref: chat:首次接入字段确认
+  summary: 用户用截图和自然语言补充 AppsFlyer 注册字段与归因窗口
+  artifacts:
+    - { kind: screenshot, ref: attachments/appsflyer-settings.png }
+    - { kind: chat, ref: "用户原话：注册使用 signup_success" }
+changes:
+  - path: metrics.registration.from
+    operation: set
+    value: af_ad.registration
+    level: P0
+    status: confirmed
+    evidence: 截图表头为 signup_success，用户明确确认其代表注册人数
+    confirmation:
+      confirmed_at: "2026-10-28T10:30:00+08:00"
+      user_quote: 注册就用 AppsFlyer 的 signup_success
+  - path: knowledge.facts.attribution_window
+    operation: set
+    value: 7-day click / 1-day view
+    level: P1
+    status: confirmed
+    evidence: 用户上传的 AppsFlyer 归因设置截图

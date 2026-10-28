@@ -5,7 +5,7 @@
 
 | 场景 | 平台组合 | 模板 | 用户知识 | 关键验收 |
 |---|---|---|---|---|
-| AtlasPay | TikTok + AppsFlyer | 有 | 熟悉字段 | AI 列出 P0，确认后按模板输出花费、注册、KYC、FTD |
+| AtlasPay | TikTok + AppsFlyer | 有 | 熟悉字段 | AI 列出 P0；注册产品并保存字段/归因知识；下一会话按别名复用后输出花费、注册、KYC、FTD |
 | BloomCart | Meta + Google + Adjust | 无 | 完全小白 | 未选周期先阻断；标准三 Sheet 展示全部平台 + 平台分项、真实日期明细、完整漏斗与效率指标 |
 | LumaGame | Google + AppsFlyer | 有 | 不懂归因字段 | Activity/LTV 多候选必须阻断；确认 Activity 后输出注册、KYC、FTD |
 
