@@ -45,7 +45,7 @@ def make_template(path: Path, sheet_name: str = "Daily") -> None:
     book = Workbook()
     sheet = book.active
     sheet.title = sheet_name
-    sheet.append(["Date", "Account ID", "Spend", "Registrations"])
+    sheet.append(["Date", "Account ID", "Spend", "Registrations", "KYC", "First Deposits"])
     book.save(path)
     book.close()
 
@@ -69,6 +69,16 @@ def target_profile(
     product: str, template: Path, ad_source: dict, attribution_source: dict,
     metrics: dict, *, join_key: str = "ad_id",
 ) -> dict:
+    columns = [
+        {"header": "Date", "source": "$report_date", "format": "date:yyyy-mm-dd"},
+        {"header": "Account ID", "source": "group.account_id", "format": "text"},
+        {"header": "Spend", "source": "metrics.spend", "format": "number:2"},
+        {"header": "Registrations", "source": "metrics.registration", "format": "number:0"},
+    ]
+    if "kyc" in metrics:
+        columns.append({"header": "KYC", "source": "metrics.kyc", "format": "number:0"})
+    if "first_deposit" in metrics:
+        columns.append({"header": "First Deposits", "source": "metrics.first_deposit", "format": "number:0"})
     return {
         "profile_version": 1,
         "product": {"name": product, "timezone": "Asia/Shanghai"},
@@ -103,12 +113,7 @@ def target_profile(
                         "row_key": {"field": "Date", "format": "date:yyyy-mm-dd"},
                         "placement": {"mode": "replace_sheet", "same_key": "replace_in_place"},
                         "column_match": "by_header", "group_by": ["account_id"],
-                        "columns": [
-                            {"header": "Date", "source": "$report_date", "format": "date:yyyy-mm-dd"},
-                            {"header": "Account ID", "source": "group.account_id", "format": "text"},
-                            {"header": "Spend", "source": "metrics.spend", "format": "number:2"},
-                            {"header": "Registrations", "source": "metrics.registration", "format": "number:0"},
-                        ],
+                        "columns": columns,
                     }],
                 },
                 {"kind": "csv", "role": "process_table", "path": "output/process_{date}.csv", "grain": "ad"},
@@ -167,7 +172,10 @@ def scenario_atlaspay(installed: Path) -> dict:
         "Date": "2026-10-27", "Account ID": "tt-a1", "Ad ID": "tt-ad1",
         "Spend": 100, "Impressions": 10000, "Clicks": 500, "Installs": 50,
     }])
-    write_csv(af, [{"Date": "2026-10-27", "Account ID": "tt-a1", "Ad ID": "tt-ad1", "Registrations": 20}])
+    write_csv(af, [{
+        "Date": "2026-10-27", "Account ID": "tt-a1", "Ad ID": "tt-ad1",
+        "Registrations": 20, "KYC Success": 12, "First Deposits": 5,
+    }])
     make_template(template)
     probe = work / "probe.json"
     draft = work / "draft.yaml"
@@ -197,10 +205,14 @@ def scenario_atlaspay(installed: Path) -> dict:
         {"raw": "Account ID", "canonical": "account_id", "dtype": "text"},
         {"raw": "Ad ID", "canonical": "ad_id", "dtype": "text"},
         {"raw": "Registrations", "canonical": "registration", "dtype": "number"},
+        {"raw": "KYC Success", "canonical": "kyc", "dtype": "number"},
+        {"raw": "First Deposits", "canonical": "first_deposit", "dtype": "number"},
     ], snapshot=True)
     profile = target_profile("AtlasPay", template, ad_source, af_source, {
         "spend": {"role": "spend", "from": "tt_ad.spend", "agg": "sum"},
         "registration": {"role": "registration", "from": "af_ad.registration", "agg": "sum"},
+        "kyc": {"role": "kyc", "from": "af_ad.kyc", "agg": "sum"},
+        "first_deposit": {"role": "first_deposit", "from": "af_ad.first_deposit", "agg": "sum"},
     })
     profile_path = work / "profile.confirmed.yaml"
     profile_path.write_text(yaml.safe_dump(profile, allow_unicode=True, sort_keys=False), encoding="utf-8")
@@ -212,9 +224,9 @@ def scenario_atlaspay(installed: Path) -> dict:
         "--source-file", f"tt_ad={ads}", "--source-file", f"af_ad={af}", "--out", output,
     ], cwd=work)
     book = load_workbook(output, data_only=True)
-    values = [book["Daily"]["C2"].value, book["Daily"]["D2"].value]
+    values = [book["Daily"].cell(2, column).value for column in range(3, 7)]
     book.close()
-    if values != [100, 20]:
+    if values != [100, 20, 12, 5]:
         raise RuntimeError(f"AtlasPay totals mismatch: {values}")
     return {"result": "PASS", "questions": len(draft_profile.get("ambiguities", [])), "totals": values}
 
@@ -231,8 +243,8 @@ def scenario_bloomcart(installed: Path) -> dict:
         meta_rows.append({"Date": day, "Account ID": "meta-a", "Ad ID": "meta-ad", "Spend": 20 if current else 10, "Impressions": 2000, "Clicks": 100, "Installs": 10})
         google_rows.append({"Date": day, "Account ID": "google-a", "Ad ID": "google-ad", "Cost": 15 if current else 5, "Impressions": 1500, "Clicks": 75, "Installs": 8})
         adjust_rows.extend([
-            {"Date": day, "Account ID": "meta-a", "Ad ID": "meta-ad", "Registrations": 2 if current else 1},
-            {"Date": day, "Account ID": "google-a", "Ad ID": "google-ad", "Registrations": 3 if current else 2},
+            {"Date": day, "Account ID": "meta-a", "Ad ID": "meta-ad", "Registrations": 2 if current else 1, "KYC Success": 1, "First Deposits": 1 if current else 0},
+            {"Date": day, "Account ID": "google-a", "Ad ID": "google-ad", "Registrations": 3 if current else 2, "KYC Success": 2 if current else 1, "First Deposits": 1},
         ])
     write_csv(meta, meta_rows)
     write_csv(google, google_rows)
@@ -298,12 +310,50 @@ def scenario_bloomcart(installed: Path) -> dict:
         "current_spend": summary.cell(9, headers["花费"]).value,
         "previous_registration": summary.cell(8, headers["注册"]).value,
         "current_registration": summary.cell(9, headers["注册"]).value,
+        "previous_kyc": summary.cell(8, headers["KYC"]).value,
+        "current_kyc": summary.cell(9, headers["KYC"]).value,
+        "previous_ftd": summary.cell(8, headers["首充"]).value,
+        "current_ftd": summary.cell(9, headers["首充"]).value,
     }
+    platform_column = headers["平台"]
+    platforms = {
+        summary.cell(row, platform_column).value
+        for row in range(8, summary.max_row + 1)
+        if summary.cell(row, platform_column).value
+    }
+    detail = book["明细数据"]
+    detail_headers = {
+        detail.cell(3, column).value: column for column in range(1, detail.max_column + 1)
+    }
+    required_headers = {"平台", "注册", "KYC", "首充", "注册→KYC率", "注册成本", "首充成本"}
+    if not required_headers.issubset(detail_headers):
+        raise RuntimeError(f"BloomCart detail is missing useful funnel columns: {required_headers - set(detail_headers)}")
+    detail_dates = {
+        str(detail.cell(row, detail_headers["日期"]).value)[:10]
+        for row in range(4, detail.max_row + 1)
+    }
+    detail_platforms = {
+        detail.cell(row, detail_headers["平台"]).value
+        for row in range(4, detail.max_row + 1)
+    }
+    trend = book["趋势环比"]
+    trend_headers = {trend.cell(3, column).value for column in range(1, trend.max_column + 1)}
     book.close()
-    expected = {"previous_spend": 105, "current_spend": 245, "previous_registration": 21, "current_registration": 35}
+    expected = {
+        "previous_spend": 105, "current_spend": 245,
+        "previous_registration": 21, "current_registration": 35,
+        "previous_kyc": 14, "current_kyc": 21,
+        "previous_ftd": 7, "current_ftd": 14,
+    }
     if values != expected:
         raise RuntimeError(f"BloomCart totals mismatch: {values}")
-    return {"result": "PASS", "initial_p0": len(p0_ids), "totals": values}
+    if platforms != {"全部平台", "meta", "google"}:
+        raise RuntimeError(f"BloomCart platform breakdown mismatch: {platforms}")
+    if len(detail_dates) != 7 or detail_platforms != {"meta", "google"}:
+        raise RuntimeError(f"BloomCart detail breakdown mismatch: dates={detail_dates}, platforms={detail_platforms}")
+    if not required_headers.issubset(trend_headers):
+        raise RuntimeError(f"BloomCart trend is missing useful funnel columns: {required_headers - trend_headers}")
+    return {"result": "PASS", "initial_p0": len(p0_ids), "platforms": sorted(platforms), "totals": values}
 
 
 def scenario_lumagame(installed: Path) -> dict:
@@ -311,7 +361,11 @@ def scenario_lumagame(installed: Path) -> dict:
     work.mkdir()
     ads, af, template = work / "google_ads.csv", work / "appsflyer_events.csv", work / "target.xlsx"
     write_csv(ads, [{"Date": "2026-10-27", "Account ID": "g-a1", "Ad ID": "g-ad1", "Cost": 80, "Impressions": 8000, "Clicks": 400, "Installs": 40}])
-    write_csv(af, [{"Date": "2026-10-27", "Account ID": "g-a1", "Ad ID": "g-ad1", "Registrations Activity": 7, "Registrations LTV": 70}])
+    write_csv(af, [{
+        "Date": "2026-10-27", "Account ID": "g-a1", "Ad ID": "g-ad1",
+        "Registrations Activity": 7, "Registrations LTV": 70,
+        "KYC Success": 5, "First Deposits": 2,
+    }])
     make_template(template)
     probe, draft = work / "probe.json", work / "draft.yaml"
     run("LumaGame probe", [
@@ -341,6 +395,8 @@ def scenario_lumagame(installed: Path) -> dict:
         {"raw": "Date", "canonical": "date", "dtype": "date"},
         {"raw": "Account ID", "canonical": "account_id", "dtype": "text"},
         {"raw": "Ad ID", "canonical": "ad_id", "dtype": "text"},
+        {"raw": "KYC Success", "canonical": "kyc", "dtype": "number"},
+        {"raw": "First Deposits", "canonical": "first_deposit", "dtype": "number"},
     ], snapshot=True)
     registration = {
         "role": "registration",
@@ -353,6 +409,8 @@ def scenario_lumagame(installed: Path) -> dict:
     profile = target_profile("LumaGame", template, ad_source, af_source, {
         "spend": {"role": "spend", "from": "gg_ad.spend", "agg": "sum"},
         "registration": registration,
+        "kyc": {"role": "kyc", "from": "af_ad.kyc", "agg": "sum"},
+        "first_deposit": {"role": "first_deposit", "from": "af_ad.first_deposit", "agg": "sum"},
     })
     profile_path = work / "profile.confirmed.yaml"
     profile_path.write_text(yaml.safe_dump(profile, allow_unicode=True, sort_keys=False), encoding="utf-8")
@@ -364,9 +422,9 @@ def scenario_lumagame(installed: Path) -> dict:
         "--source-file", f"gg_ad={ads}", "--source-file", f"af_ad={af}", "--out", output,
     ], cwd=work)
     book = load_workbook(output, data_only=True)
-    values = [book["Daily"]["C2"].value, book["Daily"]["D2"].value]
+    values = [book["Daily"].cell(2, column).value for column in range(3, 7)]
     book.close()
-    if values != [80, 7]:
+    if values != [80, 7, 5, 2]:
         raise RuntimeError(f"LumaGame used the wrong registration definition: {values}")
     return {"result": "PASS", "blocked_candidate": candidate_issue["id"], "totals": values}
 

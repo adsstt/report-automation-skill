@@ -67,6 +67,15 @@ METRIC_LABELS = {
     "registration": "注册", "kyc": "KYC", "first_deposit": "首充", "trade": "交易",
     "revenue": "收入",
 }
+GROUP_DIMENSIONS = {
+    "date": "日期", "period": "周期",
+    "platform": "平台",
+    "country": "国家名称", "country_code": "国家代码",
+    "event": "事件", "account": "账户名称", "account_id": "账户ID",
+    "campaign": "Campaign名称", "campaign_id": "广告系列ID",
+    "adgroup": "广告组名称", "adgroup_id": "广告组ID",
+    "ad": "广告名称", "ad_id": "广告ID",
+}
 
 
 # ------------------------------------------------------------------ 表达式求值
@@ -159,13 +168,36 @@ def aggregate(rows: list[dict[str, str]], dims: list[str], report_date: str,
     buckets: dict[tuple, dict[str, Decimal]] = {}
     order: list[tuple] = []
     for row in rows:
-        key = tuple(report_date if d == "日期" else str(row.get(d) or "") for d in dims)
+        key = tuple(
+            str(row.get(d) or report_date)[:10] if d == "日期" else str(row.get(d) or "")
+            for d in dims
+        )
         if key not in buckets:
             buckets[key] = {m: Decimal(0) for m in metric_names}
             order.append(key)
         for m in metric_names:
             buckets[key][m] += decimal_or_zero(row.get(CSV_COL.get(m, m)))
     return [{"__key__": key, **buckets[key]} for key in order]
+
+
+def add_overall_group(records: list[dict[str, Any]], rows: list[dict[str, str]],
+                      dims: list[str], metric_names: list[str],
+                      total_config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Add a configured overall group without duplicating process-table rows."""
+    if not total_config.get("enabled") or not dims or not rows:
+        return records
+    label_column = str(total_config.get("label_column") or "")
+    if label_column not in dims:
+        return records
+    key = ["" for _ in dims]
+    key[dims.index(label_column)] = str(total_config.get("label") or "总计")
+    totals = {name: Decimal(0) for name in metric_names}
+    for row in rows:
+        for name in metric_names:
+            totals[name] += decimal_or_zero(row.get(CSV_COL.get(name, name)))
+    overall = {"__key__": tuple(key), **totals}
+    return ([overall, *records] if total_config.get("position", "bottom") == "top"
+            else [*records, overall])
 
 
 # ------------------------------------------------------------------ 表头定位
@@ -444,7 +476,7 @@ def main() -> int:
                 continue
 
             group_by = sheet.get("group_by") if "group_by" in sheet else ["日期"]
-            dims = ["国家名称" if g == "国家" else g for g in group_by]
+            dims = [GROUP_DIMENSIONS.get(g, "国家名称" if g == "国家" else g) for g in group_by]
             filtered = rows
             flt = sheet.get("filter") or {}
             if flt.get("event"):
@@ -458,6 +490,9 @@ def main() -> int:
                 if flt.get("event"):
                     base_filtered = [r for r in base_rows if str(r.get("事件")) == flt["event"]]
                 base_agg = aggregate(base_filtered, dims, base_display, metric_names)
+                total_config = sheet.get("total_row") or {}
+                agg = add_overall_group(agg, filtered, dims, metric_names, total_config)
+                base_agg = add_overall_group(base_agg, base_filtered, dims, metric_names, total_config)
                 base_map = {tuple(r["__key__"]): r for r in base_agg}
                 if sheet.get("placement", {}).get("mode") == "replace_sheet" and ws.max_row > header_row:
                     ws.delete_rows(header_row + 1, ws.max_row - header_row)
@@ -494,7 +529,9 @@ def main() -> int:
                                 # 稀疏分组：维度值只写在每组首行（基期行），本期行与环比行留空
                                 dim = src.split(".", 1)[1]
                                 mapping = {
+                                    "date": "日期", "period": "周期",
                                     "country": "国家名称", "country_code": "国家代码",
+                                    "platform": "平台",
                                     "event": "事件", "account": "账户名称", "account_id": "账户ID",
                                     "campaign": "Campaign名称", "campaign_id": "广告系列ID",
                                     "adgroup": "广告组名称", "adgroup_id": "广告组ID",
@@ -551,8 +588,9 @@ def main() -> int:
                                 continue
                             column = colmap.get(coldef["header"])
                             if column:
+                                is_percent_value = str(coldef.get("format") or "").startswith("percent")
                                 ws.cell(row=written_row, column=column).number_format = (
-                                    "0.00%" if phase in {"delta", "delta_pct"} else "#,##0.00"
+                                    "0.00%" if phase in {"delta", "delta_pct"} or is_percent_value else "#,##0.00"
                                 )
                         written += 1
                 extend_conditional_formatting(ws, sample_row, ws.max_row - written + 1, ws.max_row, ws.max_column)
@@ -579,6 +617,8 @@ def main() -> int:
                                     f"绝对变化 {absolute:+.2f}，环比 {ratio:+.2%}。"
                                 )
                         ws["B5"] = conclusion
+                    for chart in ws._charts:
+                        chart.anchor = f"A{ws.max_row + 2}"
                 print(f"{ws.title}: 写入环比块 {written} 行（{written // max(len(phases), 1)} 组）")
                 continue
 
@@ -617,7 +657,9 @@ def main() -> int:
                     elif src.startswith("group."):
                         dim = src.split(".", 1)[1]
                         mapping = {
+                            "date": "日期", "period": "周期",
                             "country": "国家名称", "country_code": "国家代码",
+                            "platform": "平台",
                             "event": "事件", "account": "账户名称", "account_id": "账户ID",
                             "campaign": "Campaign名称", "campaign_id": "广告系列ID",
                             "adgroup": "广告组名称", "adgroup_id": "广告组ID",
@@ -633,7 +675,13 @@ def main() -> int:
                         val = eval_expr(expr, rec)
                         values[header] = float(val) if val is not None else None
                 style_from(ws, sample_row, target, ws.max_column)
+                written_row = target
                 target = write_rows(ws, target, values, colmap, headers)
+                for coldef in sheet["columns"]:
+                    if str(coldef.get("format") or "").startswith("percent"):
+                        column = colmap.get(coldef["header"])
+                        if column:
+                            ws.cell(row=written_row, column=column).number_format = "0.00%"
                 written += 1
 
             total = sheet.get("total_row") or {}

@@ -172,11 +172,12 @@ class StandardReportTests(unittest.TestCase):
                 ["管理摘要", "明细数据", "趋势环比"],
             )
 
-    def test_standard_report_sums_multiple_ad_platforms(self) -> None:
+    def test_standard_report_shows_overall_platform_breakdown_and_full_funnel(self) -> None:
         with tempfile.TemporaryDirectory(dir=ROOT / "runtime") as tmp:
             work = Path(tmp)
             meta_path = work / "meta_ads.csv"
             google_path = work / "google_ads.csv"
+            adjust_path = work / "adjust_events.csv"
             common_fields = ["Date", "Account ID", "Campaign ID", "Ad ID", "Impressions", "Clicks", "Installs"]
             with meta_path.open("w", encoding="utf-8", newline="") as handle:
                 writer = csv.DictWriter(handle, fieldnames=[*common_fields, "Spend"])
@@ -192,6 +193,17 @@ class StandardReportTests(unittest.TestCase):
                     {"Date": "2026-10-14", "Account ID": "google-a", "Campaign ID": "gc", "Ad ID": "ga", "Cost": 50, "Impressions": 5000, "Clicks": 100, "Installs": 10},
                     {"Date": "2026-10-20", "Account ID": "google-a", "Campaign ID": "gc", "Ad ID": "ga", "Cost": 100, "Impressions": 10000, "Clicks": 200, "Installs": 20},
                 ])
+            with adjust_path.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=[
+                    "Date", "Account ID", "Ad ID", "Registrations", "KYC Success", "First Deposits",
+                ])
+                writer.writeheader()
+                writer.writerows([
+                    {"Date": "2026-10-14", "Account ID": "meta-a", "Ad ID": "ma", "Registrations": 10, "KYC Success": 5, "First Deposits": 2},
+                    {"Date": "2026-10-14", "Account ID": "google-a", "Ad ID": "ga", "Registrations": 5, "KYC Success": 3, "First Deposits": 1},
+                    {"Date": "2026-10-20", "Account ID": "meta-a", "Ad ID": "ma", "Registrations": 15, "KYC Success": 9, "First Deposits": 4},
+                    {"Date": "2026-10-20", "Account ID": "google-a", "Ad ID": "ga", "Registrations": 10, "KYC Success": 6, "First Deposits": 3},
+                ])
             probe = standard_probe(work)
             google_probe = json.loads(json.dumps(probe["sources"][0]))
             google_probe["path"] = str(google_path)
@@ -201,6 +213,21 @@ class StandardReportTests(unittest.TestCase):
             ]
             probe["sources"][0]["path"] = str(meta_path)
             probe["sources"].append(google_probe)
+            probe["sources"].append({
+                "path": str(adjust_path),
+                "format": "csv", "encoding": "utf-8", "delimiter": ",", "header_row": 0,
+                "columns": [
+                    {"name": "Date", "date_ratio": 1.0, "numeric_ratio": 0.0, "role_candidates": ["date"]},
+                    {"name": "Account ID", "date_ratio": 0.0, "numeric_ratio": 0.0, "role_candidates": ["account_id"]},
+                    {"name": "Ad ID", "date_ratio": 0.0, "numeric_ratio": 0.0, "role_candidates": ["ad_id"]},
+                    {"name": "Registrations", "date_ratio": 0.0, "numeric_ratio": 1.0, "role_candidates": ["registration"]},
+                    {"name": "KYC Success", "date_ratio": 0.0, "numeric_ratio": 1.0, "role_candidates": ["kyc"]},
+                    {"name": "First Deposits", "date_ratio": 0.0, "numeric_ratio": 1.0, "role_candidates": ["first_deposit"]},
+                ],
+                "grain_candidates": [{"grain": "ad", "confidence": "high"}],
+                "date_coverage": {"min": "2026-10-14", "max": "2026-10-20", "distinct_days": 2},
+                "distinct_countries": 2,
+            })
             probe_path = work / "probe.json"
             goal_path = work / "goal.yaml"
             profile_path = work / "profile.yaml"
@@ -218,6 +245,13 @@ class StandardReportTests(unittest.TestCase):
                 "--business-goal", goal_path, "--standard-output", "--out", profile_path,
             )
             self.assertEqual(inferred.returncode, 0, inferred.stdout + inferred.stderr)
+            profile = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
+            for item in profile.get("ambiguities", []):
+                if item.get("level") == "P0":
+                    item["status"] = "confirmed"
+            profile_path.write_text(
+                yaml.safe_dump(profile, allow_unicode=True, sort_keys=False), encoding="utf-8"
+            )
             created = run_cli(
                 SCRIPTS / "create_standard_template.py", "--profile", profile_path, "--out", template_path,
             )
@@ -227,15 +261,51 @@ class StandardReportTests(unittest.TestCase):
                 "--report-type", "standard", "--date", "2026-10-21",
                 "--source-file", f"meta_ad={meta_path}",
                 "--source-file", f"gg_ad={google_path}",
+                "--source-file", f"adj_ad={adjust_path}",
                 "--out", output_path,
             )
             self.assertEqual(rendered.returncode, 0, rendered.stdout + rendered.stderr)
             workbook = load_workbook(output_path, data_only=False)
             summary = workbook["管理摘要"]
             headers = {summary.cell(row=7, column=column).value: column for column in range(1, summary.max_column + 1)}
-            spend = headers["花费"]
-            self.assertEqual(summary.cell(row=8, column=spend).value, 150)
-            self.assertEqual(summary.cell(row=9, column=spend).value, 250)
+            self.assertTrue({
+                "平台", "花费", "注册", "KYC", "首充", "注册→KYC率", "注册成本", "首充成本",
+            }.issubset(headers))
+            platform = headers["平台"]
+            spend, registration = headers["花费"], headers["注册"]
+            kyc, first_deposit = headers["KYC"], headers["首充"]
+            self.assertEqual(summary.cell(row=8, column=platform).value, "全部平台")
+            self.assertEqual(
+                [summary.cell(row=8, column=c).value for c in (spend, registration, kyc, first_deposit)],
+                [150, 15, 8, 3],
+            )
+            self.assertEqual(
+                [summary.cell(row=9, column=c).value for c in (spend, registration, kyc, first_deposit)],
+                [250, 25, 15, 7],
+            )
+            platform_rows = {
+                summary.cell(row=row, column=platform).value: row
+                for row in range(8, summary.max_row + 1)
+                if summary.cell(row=row, column=platform).value
+            }
+            self.assertEqual({"全部平台", "meta", "google"}, set(platform_rows))
+            self.assertEqual(summary.cell(row=platform_rows["meta"] + 1, column=spend).value, 150)
+            self.assertEqual(summary.cell(row=platform_rows["google"] + 1, column=spend).value, 100)
+            detail = workbook["明细数据"]
+            detail_headers = {detail.cell(row=3, column=column).value: column for column in range(1, detail.max_column + 1)}
+            self.assertTrue({"平台", "注册", "KYC", "首充", "注册→KYC率"}.issubset(detail_headers))
+            self.assertEqual(
+                {detail.cell(row=row, column=detail_headers["平台"]).value for row in range(4, detail.max_row + 1)},
+                {"meta", "google"},
+            )
+            self.assertEqual(
+                {str(detail.cell(row=row, column=detail_headers["日期"]).value)[:10] for row in range(4, detail.max_row + 1)},
+                {"2026-10-20"},
+            )
+            trend = workbook["趋势环比"]
+            trend_headers = {trend.cell(row=3, column=column).value: column for column in range(1, trend.max_column + 1)}
+            self.assertTrue({"平台", "注册", "KYC", "首充", "注册→KYC率"}.issubset(trend_headers))
+            self.assertGreaterEqual(summary._charts[0].anchor._from.row, summary.max_row)
             workbook.close()
 
     def test_infer_proposes_a_join_for_each_ad_platform(self) -> None:
@@ -594,7 +664,9 @@ class StandardReportTests(unittest.TestCase):
             self.assertEqual(generated.returncode, 0, generated.stdout + generated.stderr)
             with (out_dir / "过程表_20261012.csv").open(encoding="utf-8-sig", newline="") as handle:
                 rows = list(csv.DictReader(handle))
-            totals = {row["周期"]: float(row["花费"]) for row in rows}
+            totals: dict[str, float] = {}
+            for row in rows:
+                totals[row["周期"]] = totals.get(row["周期"], 0) + float(row["花费"])
             self.assertEqual(totals["previous_custom"], 60)
             self.assertEqual(totals["current_custom"], 150)
 

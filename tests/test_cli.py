@@ -297,8 +297,8 @@ class GenerateReportCliTests(unittest.TestCase):
             work = Path(tmp)
             source_path = work / "adjust_events.csv"
             source_path.write_text(
-                "Date,Ad ID,Registrations,Registrations Activity,Registrations LTV\n"
-                "2026-10-25,ad-1,7,6,70\n",
+                "Date,Ad ID,Registrations,Registrations Activity,Registrations LTV,KYC Success,First Deposits\n"
+                "2026-10-25,ad-1,7,6,70,5,2\n",
                 encoding="utf-8",
             )
             probe_path = work / "probe.json"
@@ -317,6 +317,8 @@ class GenerateReportCliTests(unittest.TestCase):
             }
             for name in ("Registrations", "Registrations Activity", "Registrations LTV"):
                 self.assertEqual(roles[name], ["registration"])
+            self.assertEqual(roles["KYC Success"], ["kyc"])
+            self.assertEqual(roles["First Deposits"], ["first_deposit"])
 
     def test_xlsx_source_uses_profile_layout_and_generates_report(self) -> None:
         test_tmp = ROOT / "runtime" / "test-tmp"

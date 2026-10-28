@@ -62,7 +62,7 @@ HEADER_TO_DERIVED: list[tuple[str, str]] = [
 HEADER_TO_ROLE: list[tuple[str, str]] = [
     (r"ftd.*actual", "first_deposit"),
     (r"ftd.*ltv", "first_deposit_ltv"),
-    (r"^ftd$|^ftd\b", "first_deposit"),
+    (r"^ftd$|^ftd\b|first[\s_-]*deposits?|首充|首次入金", "first_deposit"),
     (r"trade|ftt", "trade"),
     (r"income|revenue|收入", "revenue"),
     (r"^kyc|basic kyc|advanced kyc", "kyc"),
@@ -201,6 +201,48 @@ METRIC_LABELS = {
     "revenue": "收入",
 }
 
+STANDARD_METRIC_ORDER = [
+    "spend", "impressions", "clicks", "install", "registration", "kyc",
+    "first_deposit", "trade", "revenue",
+]
+
+DERIVED_LABELS = {
+    "ctr": "点击率",
+    "cvr_click_install": "点击→安装率",
+    "cvr_install_registration": "安装→注册率",
+    "cvr_registration_kyc": "注册→KYC率",
+    "cvr_kyc_ftd": "KYC→首充率",
+    "cpi": "安装成本",
+    "cpr": "注册成本",
+    "cpftd": "首充成本",
+    "roas": "ROAS",
+}
+
+
+def standard_derived(metrics: dict[str, Any]) -> dict[str, Any]:
+    """Build useful funnel/efficiency KPIs only when both inputs exist."""
+    definitions = [
+        ("ctr", "clicks", "impressions", True),
+        ("cvr_click_install", "install", "clicks", True),
+        ("cvr_install_registration", "registration", "install", True),
+        ("cvr_registration_kyc", "kyc", "registration", True),
+        ("cvr_kyc_ftd", "first_deposit", "kyc", True),
+        ("cpi", "spend", "install", False),
+        ("cpr", "spend", "registration", False),
+        ("cpftd", "spend", "first_deposit", False),
+        ("roas", "revenue", "spend", True),
+    ]
+    result: dict[str, Any] = {}
+    for name, numerator, denominator, percent in definitions:
+        if numerator not in metrics or denominator not in metrics:
+            continue
+        result[name] = {
+            "expr": f"{numerator} / {denominator}",
+            "null_policy": {"on_zero_denominator": "blank", "on_missing_numerator": "blank"},
+            "display": {"decimals": 2, "unit": "%" if percent else "", "percent": percent},
+        }
+    return result
+
 
 def recommend_period(raw_sources: list[dict[str, Any]], goal: dict[str, Any]) -> dict[str, Any]:
     """Recommend a period from observed coverage. A recommendation never confirms it."""
@@ -277,9 +319,11 @@ def standard_report_type(period: dict[str, Any], analysis_grain: str) -> dict[st
 
 
 def standard_sheets(
-    metrics: dict[str, Any], prepared: list[dict[str, Any]], primary_metrics: list[str] | None = None
+    metrics: dict[str, Any], prepared: list[dict[str, Any]], primary_metrics: list[str] | None = None,
+    derived: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    primary_metrics = (primary_metrics or list(metrics))[:8]
+    primary_metrics = primary_metrics or list(metrics)
+    derived = derived or {}
     available_roles = {
         role
         for item in prepared
@@ -299,23 +343,37 @@ def standard_sheets(
         {"header": METRIC_LABELS.get(name, name), "source": f"metrics.{name}", "format": "number:2"}
         for name in primary_metrics
     ]
+    derived_columns = [
+        {
+            "header": DERIVED_LABELS.get(name, name),
+            "source": f"derived.{name}",
+            "format": "percent:2" if (config.get("display") or {}).get("percent") else "number:2",
+        }
+        for name, config in derived.items()
+    ]
     summary_columns = [
         {"header": "周期", "source": "$report_date", "format": "text"},
         {"header": "对比", "source": "$const_comparison", "format": "text"},
+        {"header": "平台", "source": "group.platform", "format": "text"},
         *metric_columns,
+        *derived_columns,
     ]
     detail_columns = [
-        {"header": "日期", "source": "$report_date", "format": "date:yyyy-mm-dd"},
+        {"header": "日期", "source": "group.date", "format": "date:yyyy-mm-dd"},
+        {"header": "平台", "source": "group.platform", "format": "text"},
         *[
             {"header": label, "source": f"group.{source}", "format": "text"}
             for _, label, source in detail_dimensions
         ],
         *metric_columns,
+        *derived_columns,
     ]
     trend_columns = [
         {"header": "周期", "source": "$report_date", "format": "text"},
         {"header": "对比", "source": "$const_comparison", "format": "text"},
+        {"header": "平台", "source": "group.platform", "format": "text"},
         *metric_columns,
+        *derived_columns,
     ]
     base = {
         "match": "standard",
@@ -325,9 +383,9 @@ def standard_sheets(
         "style": {"inherit_from_sample": True, "apply": ["header_fill", "number_format", "column_width"]},
     }
     return [
-        {**base, "id": "management_summary", "target_sheet": "管理摘要", "role": "comparison", "header": {"row": 6, "auto_detect": False}, "group_by": [], "constant_columns": {"对比": ""}, "columns": summary_columns, "comparison_layout": {"mode": "block_interleaved", "block": {"rows": ["base", "current", "delta_abs", "delta_pct"], "group_by": [], "delta_label": "环比", "delta_value": "percent_number", "null_symbol": "N/A"}}},
-        {**base, "id": "detail_data", "target_sheet": "明细数据", "role": "history", "header": {"row": 2, "auto_detect": False}, "row_key": {"field": "日期", "format": "date:yyyy-mm-dd"}, "group_by": [item[2] for item in detail_dimensions], "columns": detail_columns},
-        {**base, "id": "trend_comparison", "target_sheet": "趋势环比", "role": "comparison", "header": {"row": 2, "auto_detect": False}, "group_by": [], "constant_columns": {"对比": ""}, "columns": trend_columns, "comparison_layout": {"mode": "block_interleaved", "block": {"rows": ["base", "current", "delta_abs", "delta_pct"], "group_by": [], "delta_label": "环比", "delta_value": "percent_number", "null_symbol": "N/A"}}},
+        {**base, "id": "management_summary", "target_sheet": "管理摘要", "role": "comparison", "header": {"row": 6, "auto_detect": False}, "group_by": ["platform"], "total_row": {"enabled": True, "position": "top", "label_column": "平台", "label": "全部平台"}, "constant_columns": {"对比": ""}, "columns": summary_columns, "comparison_layout": {"mode": "block_interleaved", "block": {"rows": ["base", "current", "delta_abs", "delta_pct"], "group_by": ["platform"], "delta_label": "环比", "delta_value": "percent_number", "null_symbol": "N/A"}}},
+        {**base, "id": "detail_data", "target_sheet": "明细数据", "role": "history", "header": {"row": 2, "auto_detect": False}, "row_key": {"field": "日期", "format": "date:yyyy-mm-dd"}, "group_by": ["date", "platform", *[item[2] for item in detail_dimensions]], "columns": detail_columns},
+        {**base, "id": "trend_comparison", "target_sheet": "趋势环比", "role": "comparison", "header": {"row": 2, "auto_detect": False}, "group_by": ["platform"], "total_row": {"enabled": True, "position": "top", "label_column": "平台", "label": "全部平台"}, "constant_columns": {"对比": ""}, "columns": trend_columns, "comparison_layout": {"mode": "block_interleaved", "block": {"rows": ["base", "current", "delta_abs", "delta_pct"], "group_by": ["platform"], "delta_label": "环比", "delta_value": "percent_number", "null_symbol": "N/A"}}},
     ]
 
 
@@ -784,8 +842,13 @@ def main() -> int:
             "revenue": ["revenue", "first_deposit", "trade", "spend", "install"],
         }
         ranked = [name for name in goal_rankings.get(goal_type, []) if name in metrics]
-        primary_kpis = [name for name in requested_kpis if name in metrics] or ranked or list(metrics)[:8]
-        sheets = standard_sheets(metrics, prepared, primary_kpis)
+        primary_kpis = []
+        for name in [*requested_kpis, *STANDARD_METRIC_ORDER, *ranked, *metrics]:
+            if name in metrics and name not in primary_kpis:
+                primary_kpis.append(name)
+        standard_derived_metrics = standard_derived(metrics)
+        profile["derived"] = standard_derived_metrics
+        sheets = standard_sheets(metrics, prepared, primary_kpis, standard_derived_metrics)
         missing_requested = [name for name in requested_kpis if name not in metrics]
         if missing_requested:
             ambiguities.append({

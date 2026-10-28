@@ -676,8 +676,9 @@ def main() -> int:
         for row in ad_rows:
             key_field = {"adgroup": "adgroup_id", "ad": "ad_id", "campaign": "campaign_id", "creative": "creative_id", "account": "account_id"}[group_grain]
             entity_key = str(row.get(key_field) or "")
-            period = report_period_label(report_type, args.date, str(row.get("date") or args.date))
-            local_key = f"{period}:{entity_key}" if segmented_periods else entity_key
+            source_date = str(row.get("date") or args.date)[:10]
+            period = report_period_label(report_type, args.date, source_date)
+            local_key = f"{period}:{source_date}:{entity_key}" if segmented_periods else f"{source_date}:{entity_key}"
             key = f"{ad_id}:{local_key}"
             bucket = buckets.setdefault(key, {
                 "sample": row,
@@ -712,7 +713,7 @@ def main() -> int:
         unmatched_label = ((profile.get("source_plan") or {}).get("unmatched_policy") or {}).get("label", "未匹配")
         process_rows.append({
             "记录键": f"{args.report_type}:{args.date}:-:{key}:{event}",
-            "日期": f"{args.date} 00:00:00",
+            "日期": f"{str(sample.get('date') or args.date)[:10]} 00:00:00",
             **({"周期": bucket["period"]} if segmented_periods else {}),
             "平台": (rules.get("platform_label") or sources_by_id[source_id].get("platform", "")),
             "端口": derive_port(sample, rules),

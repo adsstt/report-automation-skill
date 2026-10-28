@@ -125,7 +125,11 @@ python scripts/render_workbook.py --profile runtime/profile.confirmed.yaml \
 ```
 
 标准报告固定包含 `管理摘要`、`明细数据`、`趋势环比`。管理摘要和趋势环比展示上期、
-本期、绝对变化与变化率；缺少上期或分母为零时显示 `N/A`，不伪造为 0。
+本期、绝对变化与变化率；多广告平台时同时展示“全部平台”合计和各平台分项。明细按
+真实源日期、平台、账户及可用广告层级展开。源数据存在时会保留完整漏斗指标（安装、
+注册、KYC、首充、交易、收入），并自动补充点击率、各层转化率、CPI、注册成本、首充
+成本和 ROAS 等可计算指标；缺字段就不展示，不能用 0 冒充。缺少上期或分母为零时显示
+`N/A`。
 
 若从内置示例开始，先复制为项目草稿，不能直接用 `examples/` 出正式报告：
 
@@ -229,7 +233,7 @@ python evals/fresh-product/run_acceptance.py
 另有三套“打包 → 隔离安装 → DSH 同步 → 交互门禁 → 出报表”的新用户实用性矩阵，覆盖：
 
 - 有模板、熟悉字段：TikTok + AppsFlyer
-- 无模板、完全小白：Meta + Google + Adjust（自动创建标准三 Sheet，并合并两个广告平台）
+- 无模板、完全小白：Meta + Google + Adjust（标准三 Sheet 同时展示合计、平台分项和注册→KYC→首充漏斗）
 - 有模板、不懂归因口径：Google + AppsFlyer（Activity/LTV 候选必须先确认）
 
 ```bash

@@ -62,8 +62,23 @@ def display_name(name: str) -> str:
     return labels.get(name, name)
 
 
-def set_title(ws, title: str, *, draft: bool) -> None:
-    ws.merge_cells("A1:H1")
+def standard_sheet(profile: dict[str, Any], sheet_id: str) -> dict[str, Any]:
+    workbook = next(
+        artifact for artifact in profile["output"]["artifacts"]
+        if artifact.get("kind") == "xlsx_workbook"
+    )
+    return next(sheet for sheet in workbook["sheets"] if sheet.get("id") == sheet_id)
+
+
+def fallback_metric_columns(profile: dict[str, Any]) -> list[dict[str, str]]:
+    return [
+        {"header": display_name(name), "source": f"metrics.{name}", "format": "number:2"}
+        for name in metric_names(profile)
+    ]
+
+
+def set_title(ws, title: str, *, draft: bool, columns: int = 8) -> None:
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max(columns, 8))
     cell = ws["A1"]
     cell.value = "DRAFT｜待确认｜非正式交付" if draft else title
     cell.font = Font(size=15, bold=True, color=BLUE if not draft else "9C6500")
@@ -89,7 +104,15 @@ def style_columns(ws, widths: list[float]) -> None:
 
 def create_summary(ws, profile: dict[str, Any], *, draft: bool) -> None:
     intent = profile["report_intent"]
-    set_title(ws, "管理摘要", draft=draft)
+    columns = standard_sheet(profile, "management_summary")["columns"]
+    if not {"周期", "对比"}.issubset({column["header"] for column in columns}):
+        columns = [
+            {"header": "周期", "source": "$report_date", "format": "text"},
+            {"header": "对比", "source": "$const_comparison", "format": "text"},
+            *fallback_metric_columns(profile),
+        ]
+    headers = [column["header"] for column in columns]
+    set_title(ws, "管理摘要", draft=draft, columns=len(headers))
     ws["A2"] = (profile.get("product") or {}).get("name", "")
     ws["A2"].font = Font(size=18, bold=True, color=BLUE)
     ws["A3"] = "业务目标"
@@ -103,29 +126,39 @@ def create_summary(ws, profile: dict[str, Any], *, draft: bool) -> None:
     ws["B5"] = "待正式数据生成后，仅基于已验证数字填写。"
     ws["B5"].font = Font(italic=True, color=GRAY)
 
-    metrics = metric_names(profile)
-    headers = ["周期", "对比", *[display_name(name) for name in metrics]]
     for column, header in enumerate(headers, start=1):
         ws.cell(row=7, column=column, value=header)
     style_header(ws, 7, len(headers))
+    header_columns = {header: index for index, header in enumerate(headers, start=1)}
     for offset, (period_label, comparison_label) in enumerate([
         ("上一等长周期", "上期"), ("本期", "本期"), ("绝对变化", "绝对变化"), ("变化率", "环比")
     ], start=8):
-        ws.cell(row=offset, column=1, value=period_label)
-        ws.cell(row=offset, column=2, value=comparison_label)
-        for column in range(3, len(headers) + 1):
-            ws.cell(row=offset, column=column, value="N/A" if offset == 11 else None)
-            ws.cell(row=offset, column=column).number_format = "0.00%" if offset == 11 else "#,##0.00"
+        ws.cell(row=offset, column=header_columns["周期"], value=period_label)
+        ws.cell(row=offset, column=header_columns["对比"], value=comparison_label)
+        if "平台" in header_columns and offset == 8:
+            ws.cell(row=offset, column=header_columns["平台"], value="全部平台")
+        for index, definition in enumerate(columns, start=1):
+            if not definition["source"].startswith(("metrics.", "derived.")):
+                continue
+            ws.cell(row=offset, column=index, value="N/A" if offset == 11 else None)
+            ws.cell(row=offset, column=index).number_format = (
+                "0.00%" if offset == 11 or str(definition.get("format") or "").startswith("percent")
+                else "#,##0.00"
+            )
     ws.freeze_panes = "A8"
     ws.auto_filter.ref = f"A7:{get_column_letter(len(headers))}8"
-    style_columns(ws, [18, *([15] * len(metrics))])
+    style_columns(ws, [18 if header in {"周期", "平台"} else 15 for header in headers])
 
     chart = LineChart()
     chart.title = "核心指标趋势"
     chart.y_axis.title = "指标值"
     chart.x_axis.title = "周期"
-    if metrics:
-        chart.add_data(Reference(ws, min_col=3, max_col=len(headers), min_row=7, max_row=9), titles_from_data=True)
+    numeric_columns = [
+        index for index, definition in enumerate(columns, start=1)
+        if definition["source"].startswith(("metrics.", "derived."))
+    ]
+    if numeric_columns:
+        chart.add_data(Reference(ws, min_col=min(numeric_columns), max_col=max(numeric_columns), min_row=7, max_row=9), titles_from_data=True)
         chart.set_categories(Reference(ws, min_col=1, min_row=8, max_row=9))
     chart.height = 7
     chart.width = 15
@@ -133,17 +166,14 @@ def create_summary(ws, profile: dict[str, Any], *, draft: bool) -> None:
 
 
 def create_detail(ws, profile: dict[str, Any], *, draft: bool) -> None:
-    set_title(ws, "明细数据", draft=draft)
-    intent = profile["report_intent"]
-    dimension_labels = {
-        "date": "日期", "account_id": "账户ID", "country_code": "国家代码",
-        "campaign_id": "Campaign ID", "adgroup_id": "Ad Group ID", "ad_id": "Ad ID",
-    }
-    dimensions = [name for name in (intent.get("dimensions") or []) if name in dimension_labels]
-    headers = [dimension_labels[name] for name in dimensions]
-    if "日期" not in headers:
-        headers.insert(0, "日期")
-    headers.extend(display_name(name) for name in metric_names(profile))
+    columns = standard_sheet(profile, "detail_data")["columns"]
+    if not any(column["source"].startswith("metrics.") for column in columns):
+        columns = [
+            {"header": "日期", "source": "$report_date", "format": "date:yyyy-mm-dd"},
+            *fallback_metric_columns(profile),
+        ]
+    headers = [column["header"] for column in columns]
+    set_title(ws, "明细数据", draft=draft, columns=len(headers))
     for column, header in enumerate(headers, start=1):
         ws.cell(row=3, column=column, value=header)
     style_header(ws, 3, len(headers))
@@ -153,25 +183,39 @@ def create_detail(ws, profile: dict[str, Any], *, draft: bool) -> None:
 
 
 def create_trend(ws, profile: dict[str, Any], *, draft: bool) -> None:
-    set_title(ws, "趋势环比", draft=draft)
-    headers = ["周期", "对比", *[display_name(name) for name in metric_names(profile)]]
+    columns = standard_sheet(profile, "trend_comparison")["columns"]
+    if not {"周期", "对比"}.issubset({column["header"] for column in columns}):
+        columns = [
+            {"header": "周期", "source": "$report_date", "format": "text"},
+            {"header": "对比", "source": "$const_comparison", "format": "text"},
+            *fallback_metric_columns(profile),
+        ]
+    headers = [column["header"] for column in columns]
+    set_title(ws, "趋势环比", draft=draft, columns=len(headers))
     for column, header in enumerate(headers, start=1):
         ws.cell(row=3, column=column, value=header)
     style_header(ws, 3, len(headers))
-    ws["A4"] = "上一等长周期"
-    ws["B4"] = "上期"
-    ws["A5"] = "本期"
-    ws["B5"] = "本期"
-    ws["A6"] = "绝对变化"
-    ws["B6"] = "绝对变化"
-    ws["A7"] = "变化率"
-    ws["B7"] = "环比"
-    for column in range(3, len(headers) + 1):
-        ws.cell(row=7, column=column, value="N/A")
-        ws.cell(row=7, column=column).number_format = "0.00%"
+    header_columns = {header: index for index, header in enumerate(headers, start=1)}
+    for row, (period_label, comparison_label) in enumerate([
+        ("上一等长周期", "上期"), ("本期", "本期"),
+        ("绝对变化", "绝对变化"), ("变化率", "环比"),
+    ], start=4):
+        ws.cell(row=row, column=header_columns["周期"], value=period_label)
+        ws.cell(row=row, column=header_columns["对比"], value=comparison_label)
+        if "平台" in header_columns and row == 4:
+            ws.cell(row=row, column=header_columns["平台"], value="全部平台")
+        for index, definition in enumerate(columns, start=1):
+            if not definition["source"].startswith(("metrics.", "derived.")):
+                continue
+            if row == 7:
+                ws.cell(row=row, column=index, value="N/A")
+            ws.cell(row=row, column=index).number_format = (
+                "0.00%" if row == 7 or str(definition.get("format") or "").startswith("percent")
+                else "#,##0.00"
+            )
     ws.freeze_panes = "A4"
     ws.auto_filter.ref = f"A3:{get_column_letter(len(headers))}7"
-    style_columns(ws, [18, 12, *([15] * max(0, len(headers) - 2))])
+    style_columns(ws, [18 if header in {"周期", "平台"} else 15 for header in headers])
 
 
 def output_path(requested: Path, draft: bool) -> Path:
